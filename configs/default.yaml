@@ -23,6 +23,10 @@ critic_provider: "google"
 reviewer_provider: "google"
 decisor_provider: "google"
 
+# --- Critic loop ---
+critic_min_rounds: 2
+critic_max_rounds: 5
+
 # --- Execution ---
 # Maximum correction loop iterations before escalating to the user
 max_retries: 3

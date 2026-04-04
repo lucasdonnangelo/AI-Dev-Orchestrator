@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from orchestrator import executor, planner, reviewer
+from orchestrator import critic, executor, planner, reviewer
 from orchestrator.config import Config
 from orchestrator.models import CycleRecord, CycleStatus
 
@@ -14,7 +14,8 @@ async def run_cycle(task: str, config: Config) -> CycleRecord:
 
     Flow:
         1. Planner generates a TaskPlan
-        2. Executor implements the plan
+        1b. Critic loop refines the plan (min 2, max 5 rounds)
+        2. Executor implements the refined plan
         3. Reviewer evaluates the result
         4. If rejected and attempts < max_retries → re-execute with feedback
         5. If approved → return record for user to confirm commit
@@ -31,6 +32,9 @@ async def run_cycle(task: str, config: Config) -> CycleRecord:
 
     # 1. Plan
     record.plan = await planner.generate_plan(task, config)
+
+    # 1b. Critic loop — refine plan before execution
+    record.plan = await critic.run_critic_loop(task, record.plan, config)
 
     # 2-6. Execute → Review loop
     feedback = ""

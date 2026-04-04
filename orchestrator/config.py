@@ -34,6 +34,10 @@ class Config:
     reviewer_provider: str = "google"
     decisor_provider: str = "google"
 
+    # --- Critic loop ---
+    critic_min_rounds: int = 2
+    critic_max_rounds: int = 5
+
     # --- Execution ---
     max_retries: int = 3
     executor_allowed_tools: list[str] = field(
@@ -73,6 +77,12 @@ class Config:
         # 4. Env-var overrides (highest priority)
         api_key = os.getenv("ANTHROPIC_API_KEY", "")
         model = os.getenv("ORCHESTRATOR_MODEL", data.get("model", "claude-sonnet-4-6"))
+        critic_min_rounds = int(
+            os.getenv("CRITIC_MIN_ROUNDS", data.get("critic_min_rounds", 2))
+        )
+        critic_max_rounds = int(
+            os.getenv("CRITIC_MAX_ROUNDS", data.get("critic_max_rounds", 5))
+        )
         max_retries = int(
             os.getenv("ORCHESTRATOR_MAX_RETRIES", data.get("max_retries", 3))
         )
@@ -111,6 +121,8 @@ class Config:
             critic_provider=critic_provider,
             reviewer_provider=reviewer_provider,
             decisor_provider=decisor_provider,
+            critic_min_rounds=critic_min_rounds,
+            critic_max_rounds=critic_max_rounds,
             max_retries=max_retries,
             executor_allowed_tools=data.get(
                 "executor_allowed_tools",
@@ -169,6 +181,10 @@ class Config:
                 "Add it to .env: OPENAI_API_KEY=sk-..."
             )
 
+        if self.critic_min_rounds < 1:
+            errors.append("critic_min_rounds must be >= 1")
+        if self.critic_max_rounds < self.critic_min_rounds:
+            errors.append("critic_max_rounds must be >= critic_min_rounds")
         if self.max_retries < 1:
             errors.append("max_retries must be >= 1")
 

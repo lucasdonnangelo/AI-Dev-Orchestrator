@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from orchestrator.config import Config
 from orchestrator.models import TaskPlan
 from orchestrator.providers import make_provider
+
+if TYPE_CHECKING:
+    from orchestrator.models import CriticResult
 
 _PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "planner_system.md"
 
@@ -31,6 +35,41 @@ async def generate_plan(task: str, config: Config, context: str = "") -> TaskPla
     user_message = f"Task: {task}"
     if context:
         user_message += f"\n\nProject context:\n{context}"
+
+    provider = make_provider(config.planner_provider, config)
+    raw = await provider.call(prompt=user_message, system=_load_system_prompt())
+    return TaskPlan.from_json(raw)
+
+
+async def refine_plan(
+    task: str,
+    current_plan: TaskPlan,
+    critic_result: CriticResult,
+    config: Config,
+) -> TaskPlan:
+    """Ask the Planner to improve the current plan based on Critic feedback.
+
+    Args:
+        task: Original task description.
+        current_plan: The plan that was just critiqued.
+        critic_result: Feedback from the Critic agent.
+        config: Resolved orchestrator configuration.
+
+    Returns:
+        A revised TaskPlan that addresses the Critic's observations.
+    """
+    observations = "\n".join(f"- {o}" for o in critic_result.observations)
+    suggestions = "\n".join(f"- {s}" for s in critic_result.suggestions)
+
+    user_message = (
+        f"Task: {task}\n\n"
+        f"## Current Plan (score {critic_result.score}/10 — needs improvement)\n\n"
+        f"{current_plan.to_json(indent=2)}\n\n"
+        f"## Critic Observations\n\n{observations}\n\n"
+        f"## Critic Suggestions\n\n{suggestions}\n\n"
+        "Please produce an improved plan that addresses the critic's feedback. "
+        "Return only the JSON plan."
+    )
 
     provider = make_provider(config.planner_provider, config)
     raw = await provider.call(prompt=user_message, system=_load_system_prompt())
