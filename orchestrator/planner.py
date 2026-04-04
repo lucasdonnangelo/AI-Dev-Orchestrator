@@ -1,13 +1,12 @@
-"""Planner agent — decomposes a task into a structured TaskPlan via the Anthropic API."""
+"""Planner agent — decomposes a task into a structured TaskPlan."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from anthropic import AsyncAnthropic
-
 from orchestrator.config import Config
 from orchestrator.models import TaskPlan
+from orchestrator.providers import make_provider
 
 _PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "planner_system.md"
 
@@ -19,7 +18,7 @@ def _load_system_prompt() -> str:
 
 
 async def generate_plan(task: str, config: Config, context: str = "") -> TaskPlan:
-    """Call the Anthropic API to generate a TaskPlan for the given task.
+    """Generate a TaskPlan for the given task using the configured planner provider.
 
     Args:
         task: Natural-language description of what needs to be done.
@@ -33,13 +32,6 @@ async def generate_plan(task: str, config: Config, context: str = "") -> TaskPla
     if context:
         user_message += f"\n\nProject context:\n{context}"
 
-    client = AsyncAnthropic(api_key=config.api_key)
-    response = await client.messages.create(
-        model=config.model,
-        max_tokens=1024,
-        system=_load_system_prompt(),
-        messages=[{"role": "user", "content": user_message}],
-    )
-
-    raw = response.content[0].text
+    provider = make_provider(config.planner_provider, config)
+    raw = await provider.call(prompt=user_message, system=_load_system_prompt())
     return TaskPlan.from_json(raw)

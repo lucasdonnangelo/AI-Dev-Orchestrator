@@ -7,7 +7,12 @@
       "Bash(python -c \"from orchestrator.executor import execute_plan; print\\('import OK'\\)\")",
       "Bash(python -c ':*)",
       "Bash(python -c \"from orchestrator.orchestrator import run_cycle; print\\('import OK'\\)\")",
-      "Bash(python -c \"from orchestrator.cli import cli; print\\('import OK'\\)\")"
+      "Bash(python -c \"from orchestrator.cli import cli; print\\('import OK'\\)\")",
+      "Bash(orchestrate run:*)",
+      "Bash(pip show:*)",
+      "Bash(python -m orchestrator.cli --version)",
+      "Bash(python -m orchestrator.cli run \"Criar uma funcao hello\\(\\) que recebe um nome e retorna 'Hello, nome!'\" -d cobaia -y)",
+      "Bash(REVIEWER_PROVIDER=anthropic CRITIC_PROVIDER=anthropic DECISOR_PROVIDER=anthropic python -m orchestrator.cli run \"Adicionar uma funcao add\\(a, b\\) que retorna a soma de dois numeros\" -d cobaia -y)"
     ]
   }
 }

@@ -16,8 +16,25 @@ _DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "configs" / "def
 class Config:
     """Resolved configuration for the orchestrator."""
 
+    # --- Anthropic ---
     api_key: str
     model: str = "claude-sonnet-4-6"
+
+    # --- Google (Gemini) ---
+    google_api_key: str = ""
+    google_model: str = "gemini-2.5-flash"
+
+    # --- OpenAI ---
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4o-mini"
+
+    # --- Provider assignment per role ---
+    planner_provider: str = "anthropic"
+    critic_provider: str = "google"
+    reviewer_provider: str = "google"
+    decisor_provider: str = "google"
+
+    # --- Execution ---
     max_retries: int = 3
     executor_allowed_tools: list[str] = field(
         default_factory=lambda: ["Read", "Edit", "Write", "Bash", "Glob", "Grep"]
@@ -61,9 +78,39 @@ class Config:
         )
         log_level = os.getenv("ORCHESTRATOR_LOG_LEVEL", data.get("log_level", "INFO"))
 
+        google_api_key = os.getenv("GOOGLE_API_KEY", data.get("google_api_key", ""))
+        google_model = os.getenv(
+            "GOOGLE_MODEL", data.get("google_model", "gemini-2.5-flash")
+        )
+        openai_api_key = os.getenv("OPENAI_API_KEY", data.get("openai_api_key", ""))
+        openai_model = os.getenv(
+            "OPENAI_MODEL", data.get("openai_model", "gpt-4o-mini")
+        )
+
+        planner_provider = os.getenv(
+            "PLANNER_PROVIDER", data.get("planner_provider", "anthropic")
+        )
+        critic_provider = os.getenv(
+            "CRITIC_PROVIDER", data.get("critic_provider", "google")
+        )
+        reviewer_provider = os.getenv(
+            "REVIEWER_PROVIDER", data.get("reviewer_provider", "google")
+        )
+        decisor_provider = os.getenv(
+            "DECISOR_PROVIDER", data.get("decisor_provider", "google")
+        )
+
         return cls(
             api_key=api_key,
             model=model,
+            google_api_key=google_api_key,
+            google_model=google_model,
+            openai_api_key=openai_api_key,
+            openai_model=openai_model,
+            planner_provider=planner_provider,
+            critic_provider=critic_provider,
+            reviewer_provider=reviewer_provider,
+            decisor_provider=decisor_provider,
             max_retries=max_retries,
             executor_allowed_tools=data.get(
                 "executor_allowed_tools",
@@ -79,11 +126,50 @@ class Config:
     def validate(self) -> list[str]:
         """Return list of validation errors (empty = OK)."""
         errors: list[str] = []
+
+        # Anthropic key is always required (Planner + Executor use Claude)
         if not self.api_key:
             errors.append(
                 "ANTHROPIC_API_KEY not set. "
                 "Add it to .env or export it: export ANTHROPIC_API_KEY=sk-ant-..."
             )
+
+        # Check that providers configured for each role have their key available
+        google_roles = [
+            role
+            for role, prov in (
+                ("planner", self.planner_provider),
+                ("critic", self.critic_provider),
+                ("reviewer", self.reviewer_provider),
+                ("decisor", self.decisor_provider),
+            )
+            if prov == "google"
+        ]
+        if google_roles and not self.google_api_key:
+            roles_str = ", ".join(google_roles)
+            errors.append(
+                f"GOOGLE_API_KEY not set but required for role(s): {roles_str}. "
+                "Add it to .env: GOOGLE_API_KEY=AI..."
+            )
+
+        openai_roles = [
+            role
+            for role, prov in (
+                ("planner", self.planner_provider),
+                ("critic", self.critic_provider),
+                ("reviewer", self.reviewer_provider),
+                ("decisor", self.decisor_provider),
+            )
+            if prov == "openai"
+        ]
+        if openai_roles and not self.openai_api_key:
+            roles_str = ", ".join(openai_roles)
+            errors.append(
+                f"OPENAI_API_KEY not set but required for role(s): {roles_str}. "
+                "Add it to .env: OPENAI_API_KEY=sk-..."
+            )
+
         if self.max_retries < 1:
             errors.append("max_retries must be >= 1")
+
         return errors

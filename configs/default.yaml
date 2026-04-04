@@ -3,9 +3,27 @@
 # =============================================================================
 # Override per-project by placing a .orchestrator.yaml in the project root.
 
-# Model used by Planner and Reviewer agents
+# --- Anthropic ---
+# Model used by the Planner and (if planner_provider=anthropic) Reviewer
 model: "claude-sonnet-4-6"
 
+# --- Google (Gemini) ---
+# google_api_key is read from GOOGLE_API_KEY env var; set here only for
+# project-level overrides (not recommended — use .env instead)
+google_model: "gemini-2.5-flash"
+
+# --- OpenAI ---
+# openai_api_key is read from OPENAI_API_KEY env var
+openai_model: "gpt-4o-mini"
+
+# --- Provider assignment per role ---
+# Valid values: anthropic | google | openai
+planner_provider: "anthropic"
+critic_provider: "google"
+reviewer_provider: "google"
+decisor_provider: "google"
+
+# --- Execution ---
 # Maximum correction loop iterations before escalating to the user
 max_retries: 3
 
