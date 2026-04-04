@@ -1,29 +1,45 @@
 # CLAUDE.md — Contexto para Claude Code
 
-## O Que É Este Projeto
+## O Que E Este Projeto
 
-**AI Dev Orchestrator** — um sistema CLI em Python que automatiza o ciclo de desenvolvimento usando 3 agentes de IA:
+**AI Dev Orchestrator** — sistema CLI em Python que automatiza o ciclo de desenvolvimento usando multiplas IAs com papeis separados e validacao em camadas.
 
-1. **Planner** (API Anthropic) → recebe uma task em linguagem natural, gera um plano estruturado (JSON)
-2. **Executor** (Claude Agent SDK) → recebe o plano e implementa o código no projeto-alvo
-3. **Reviewer** (API Anthropic) → recebe o plano + diff do código, avalia qualidade e aprova/rejeita
+### Papeis das IAs (Visao Final)
 
-O desenvolvedor humano confirma o commit no final.
+| Papel | O que faz | Provider |
+|-------|-----------|----------|
+| **Planner** | Gera plano estruturado a partir de uma task | Claude (Anthropic) |
+| **Critico** | Critica e melhora o plano (2-5 rounds) | Gemini ou ChatGPT |
+| **Executor** | Implementa o codigo seguindo o plano | Claude Code (Agent SDK) |
+| **Reviewer** | Avalia qualidade do codigo gerado | Gemini ou ChatGPT |
+| **Decisor** | Valida coerencia com o plano geral | Gemini ou ChatGPT |
+
+**Principio:** Claude planeja e executa. IAs de outro provider criticam, revisam e validam. Elimina vies.
+
+### Fluxo Completo
 
 ```
-Você (task) → Planner → Executor → Reviewer → Aprovado? → Você confirma commit
-                                      ↑          ↓ NÃO
-                                      └──────────┘ (max 3x, depois escala pro humano)
+Voce (task)
+  --> Planner (Claude) gera plano
+  --> Critico (Gemini/GPT) critica [2-5 rounds ate consenso]
+  --> Plano Final
+  --> Executor (Agent SDK) implementa
+  --> Reviewer (Gemini/GPT) avalia codigo [max 3 retries]
+  --> Decisor (Gemini/GPT) valida coerencia com plano
+  --> Atualiza SESSAO_ATUAL.md
+  --> Proxima tarefa (ou escala para voce)
 ```
 
 ## Stack
 
 - **Python 3.10+**
-- **anthropic** SDK (Messages API) — para Planner e Reviewer
-- **claude-agent-sdk** (Agent SDK Python, v0.1.54) — para Executor
-- **click** — framework CLI
-- **rich** — output bonito no terminal
-- **python-dotenv** + **pyyaml** — configuração
+- **anthropic** SDK — Planner e fallback
+- **claude-agent-sdk** v0.1.54 — Executor
+- **google-genai** — Gemini (Critico, Reviewer, Decisor) [Fase 2]
+- **openai** — ChatGPT como alternativa [Fase 2]
+- **click** — CLI framework
+- **rich** — output formatado no terminal
+- **python-dotenv** + **pyyaml** — configuracao
 
 ## Estrutura do Projeto
 
@@ -33,143 +49,139 @@ ai-dev-orchestrator/
 │   ├── __init__.py          # Package init + __version__
 │   ├── cli.py               # CLI com click (entrypoint: orchestrate)
 │   ├── config.py            # Carrega .env + YAML, resolve Config
-│   ├── models.py            # Dataclasses: TaskPlan, ReviewResult, CycleRecord
-│   ├── planner.py           # ⬜ STUB — Fase 1.2
-│   ├── executor.py          # ⬜ STUB — Fase 1.3
-│   ├── reviewer.py          # ⬜ STUB — Fase 1.4
-│   ├── orchestrator.py      # ⬜ STUB — Fase 1.5
+│   ├── models.py            # TaskPlan, ReviewResult, CycleRecord
+│   ├── planner.py           # [OK] Planner — AsyncAnthropic
+│   ├── executor.py          # [OK] Executor — claude-agent-sdk
+│   ├── reviewer.py          # [OK] Reviewer — AsyncAnthropic (sera migrado para multi-provider)
+│   ├── orchestrator.py      # [OK] Loop Planner->Executor->Reviewer
+│   ├── critic.py            # [FASE 2] Critico do Plano
+│   ├── decisor.py           # [FASE 2] Decisor pos-review
+│   ├── providers/           # [FASE 2] Arquitetura multi-provider
+│   │   ├── __init__.py
+│   │   ├── base.py          # BaseAgent (interface abstrata)
+│   │   ├── anthropic.py     # ClaudeProvider
+│   │   ├── google.py        # GeminiProvider
+│   │   └── openai.py        # OpenAIProvider
 │   └── prompts/
-│       ├── planner_system.md    # ✅ System prompt do Planner (pronto)
-│       ├── reviewer_system.md   # ✅ System prompt do Reviewer (pronto)
-│       └── executor_context.md  # ✅ Contexto base do Executor (pronto)
+│       ├── planner_system.md    # [OK] System prompt do Planner
+│       ├── reviewer_system.md   # [OK] System prompt do Reviewer
+│       ├── executor_context.md  # [OK] Contexto base do Executor
+│       ├── critic_system.md     # [FASE 2] System prompt do Critico
+│       └── decisor_system.md    # [FASE 2] System prompt do Decisor
 ├── configs/
-│   └── default.yaml         # ✅ Config padrão
+│   └── default.yaml
 ├── logs/
 ├── docs/
-│   └── AI_Dev_Orchestrator_Plano.md  # Plano completo do projeto
-├── .env                     # API key (não commitado)
-├── .env.example             # Template do .env
-├── .gitignore               # ✅
-├── requirements.txt         # ✅
-├── pyproject.toml           # ✅ Entrypoint: orchestrate = orchestrator.cli:cli
-└── README.md                # ✅
+│   └── AI_Dev_Orchestrator_Plano_v2.md  # Plano completo do projeto
+├── SESSAO_ATUAL.md          # [FASE 2] Estado atual (atualizado automaticamente)
+├── .env
+├── .gitignore
+├── requirements.txt
+├── pyproject.toml
+└── README.md
 ```
 
 ## Status Atual
 
-### ✅ Fase 1.1 — Setup (COMPLETA)
-- Repositório criado e vinculado ao GitHub
-- Estrutura de pastas criada
-- `pyproject.toml` configurado com entrypoint CLI
-- `pip install -e ".[dev]"` funcionando
-- Config (.env + YAML) funcionando
-- Models (TaskPlan, ReviewResult, CycleRecord) implementados
-- System prompts dos agentes escritos
-- CLI básica com click (orchestrate run/status/history)
+### [OK] Fase 1 — MVP Funcional (COMPLETA)
 
-### ⬜ Fase 1.2 — Planner Agent (PRÓXIMA)
-- Implementar `orchestrator/planner.py`
-- Chamar API Anthropic com system prompt de `prompts/planner_system.md`
-- Enviar a task + contexto do projeto como user message
-- Parsear resposta JSON em `TaskPlan` (dataclass em `models.py`)
-- Modelo: `claude-sonnet-4-6`
-- **Teste:** `"Criar um endpoint GET /health que retorna status 200"` → deve gerar TaskPlan válido
+Tudo implementado e testado:
+- Planner gera TaskPlan via API Anthropic
+- Executor implementa codigo via Agent SDK com bypassPermissions
+- Reviewer avalia codigo via API Anthropic
+- Orquestrador conecta os 3 com loop de correcao (max 3 retries)
+- CLI exibe plano, review, diff e pede confirmacao de commit
+- Tratamento de APIError e KeyboardInterrupt
 
-### ⬜ Fase 1.3 — Executor Agent
-- Implementar `orchestrator/executor.py`
-- Usar `claude-agent-sdk` (query + ClaudeAgentOptions)
-- Receber TaskPlan, montar prompt com contexto do executor
-- Executar no diretório do projeto-alvo
-- Capturar diff das mudanças
-- Controlar permissões com `allowed_tools`
-- **API do Agent SDK:**
+### [>>] Fase 2 — Multi-Model e Robustez (PROXIMA)
+
+#### 2.1 Arquitetura Multi-Provider
+- Criar `orchestrator/providers/base.py` com `BaseAgent` abstrato
+- Implementar `ClaudeProvider`, `GeminiProvider`, `OpenAIProvider`
+- Config para escolher provider por papel
+
+#### 2.2 Critico do Plano
+- `orchestrator/critic.py` — loop iterativo Planner <-> Critico (2-5 rounds)
+- Critico usa Gemini/ChatGPT, retorna `CriticResult`
+- Parada: consensus=true ou max rounds
+
+#### 2.3 Decisor
+- `orchestrator/decisor.py` — valida coerencia pos-review
+- Recebe: plano + diff + ReviewResult + SESSAO_ATUAL.md
+- Retorna `DecisionResult` (approved + inconsistencies)
+
+#### 2.4 SESSAO_ATUAL.md Automatizado
+- Gerar/atualizar apos cada tarefa aprovada
+- Conteudo: o que foi feito, estado atual, proximas etapas
+
+#### 2.5 Robustez
+- Retry em erros de API (todos os providers)
+- Corrigir _get_diff para Windows (substituir /dev/null)
+- Timeout configuravel
+
+#### 2.6 Logging e Historico
+- Salvar execucoes em logs/ (JSON)
+- Comandos orchestrate history e orchestrate status
+
+### [ ] Fase 3 — Orquestracao Avancada
+- Multi-task (batch), contexto inteligente, git avancado, metricas
+
+### [ ] Fase 4 — Extensibilidade
+- Templates de projeto, plugins de providers, modo interativo
+
+## Modelos de Dados (models.py)
+
+### Existentes (implementados)
+
 ```python
-from claude_agent_sdk import query, ClaudeAgentOptions
+class TaskPlan:        # Output do Planner
+    description, files_to_create, files_to_modify, steps,
+    acceptance_criteria, estimated_complexity
 
-options = ClaudeAgentOptions(
-    allowed_tools=["Read", "Edit", "Write", "Bash"],
-    cwd="/path/to/project",
-)
+class ReviewResult:    # Output do Reviewer
+    approved, score, issues: list[ReviewIssue], suggestions, summary
 
-async for message in query(prompt=executor_prompt, options=options):
-    # processar mensagens do agente
+class CycleRecord:     # Log de uma execucao
+    task, status, plan, review, attempt, started_at, finished_at, commit_hash
 ```
 
-### ⬜ Fase 1.4 — Reviewer Agent
-- Implementar `orchestrator/reviewer.py`
-- Chamar API Anthropic com system prompt de `prompts/reviewer_system.md`
-- Enviar plano original + diff como user message
-- Parsear resposta JSON em `ReviewResult` (dataclass em `models.py`)
-- Regras: critical issue → rejeição automática; score < 7 → rejeição
+### Novos (Fase 2)
 
-### ⬜ Fase 1.5 — Orquestrador + CLI
-- Implementar `orchestrator/orchestrator.py` que conecta os 3 agentes
-- Loop de correção: se Reviewer rejeita, reenvia pro Executor com feedback (max 3x)
-- Conectar tudo no `cli.py` (comando `orchestrate run`)
-- Mostrar diff e pedir confirmação de commit
-- Gerar commit message automática
-
-## Modelos de Dados Importantes (já implementados em models.py)
-
-### TaskPlan (output do Planner)
 ```python
-@dataclass
-class TaskPlan:
-    description: str
-    files_to_create: list[str]
-    files_to_modify: list[str]
-    steps: list[str]
-    acceptance_criteria: list[str]
-    estimated_complexity: Complexity  # low | medium | high
-```
-
-### ReviewResult (output do Reviewer)
-```python
-@dataclass
-class ReviewResult:
-    approved: bool
-    score: int  # 1-10
-    issues: list[ReviewIssue]  # severity: critical | warning | info
+class CriticResult:    # Output do Critico
+    consensus: bool
+    observations: list[str]
     suggestions: list[str]
-    summary: str
+    score: int  # 1-10
+    round: int
+
+class DecisionResult:  # Output do Decisor
+    approved: bool
+    reasoning: str
+    inconsistencies: list[str]
 ```
 
-### CycleRecord (log de uma execução)
-```python
-@dataclass
-class CycleRecord:
-    task: str
-    status: CycleStatus
-    plan: TaskPlan | None
-    review: ReviewResult | None
-    attempt: int
-    started_at: str
-    finished_at: str | None
-    commit_hash: str | None
-```
+## Config (config.py)
 
-## Config (já implementado em config.py)
+Carrega em camadas: `configs/default.yaml` -> `.orchestrator.yaml` do projeto -> env vars.
 
-A classe `Config` carrega em camadas: `configs/default.yaml` → `.orchestrator.yaml` do projeto → variáveis de ambiente.
+Campos atuais: api_key, model, max_retries, executor_allowed_tools, project_dir.
 
-Campos principais:
-- `api_key` — ANTHROPIC_API_KEY
-- `model` — modelo para Planner/Reviewer (default: claude-sonnet-4-6)
-- `max_retries` — tentativas de correção (default: 3)
-- `executor_allowed_tools` — ferramentas permitidas pro Executor
-- `project_dir` — diretório do projeto-alvo
+Campos novos (Fase 2): google_api_key, openai_api_key, planner_provider, critic_provider, reviewer_provider, decisor_provider, critic_max_rounds.
 
-## Convenções de Código
+## Convencoes de Codigo
 
-- Python 3.10+ (use `from __future__ import annotations` para forward refs)
+- Python 3.10+ com `from __future__ import annotations`
 - Type hints em tudo
 - Async/await para chamadas de API e Agent SDK
-- Formatação: ruff (line-length 100)
+- Formatacao: ruff (line-length 100)
 - Testes: pytest + pytest-asyncio
+- Sem emojis Unicode no output (compatibilidade Windows cp1252)
+- Marcadores ASCII: [OK], [X], [!] em vez de emojis
 
-## Referências Importantes
+## Referencias
 
-- Plano completo: `docs/AI_Dev_Orchestrator_Plano.md`
+- Plano completo: `docs/AI_Dev_Orchestrator_Plano_v2.md`
 - Anthropic Python SDK: https://github.com/anthropics/anthropic-sdk-python
 - Claude Agent SDK: https://pypi.org/project/claude-agent-sdk/ (v0.1.54)
 - Agent SDK docs: https://platform.claude.com/docs/en/agent-sdk/overview

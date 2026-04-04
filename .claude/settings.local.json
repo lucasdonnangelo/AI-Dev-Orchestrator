@@ -2,7 +2,12 @@
   "permissions": {
     "allow": [
       "Bash(/c/Users/lucas/AppData/Roaming/Python/Python313/Scripts/orchestrate.exe --version)",
-      "Bash(/c/Users/lucas/AppData/Roaming/Python/Python313/Scripts/orchestrate.exe run:*)"
+      "Bash(/c/Users/lucas/AppData/Roaming/Python/Python313/Scripts/orchestrate.exe run:*)",
+      "Bash(python -c \"from claude_agent_sdk import ClaudeAgentOptions; help\\(ClaudeAgentOptions.__init__\\)\")",
+      "Bash(python -c \"from orchestrator.executor import execute_plan; print\\('import OK'\\)\")",
+      "Bash(python -c ':*)",
+      "Bash(python -c \"from orchestrator.orchestrator import run_cycle; print\\('import OK'\\)\")",
+      "Bash(python -c \"from orchestrator.cli import cli; print\\('import OK'\\)\")"
     ]
   }
 }
