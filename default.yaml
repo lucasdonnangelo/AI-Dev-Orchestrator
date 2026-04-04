@@ -1,0 +1,29 @@
+# =============================================================================
+# AI Dev Orchestrator — Default Configuration
+# =============================================================================
+# Override per-project by placing a .orchestrator.yaml in the project root.
+
+# Model used by Planner and Reviewer agents
+model: "claude-sonnet-4-6"
+
+# Maximum correction loop iterations before escalating to the user
+max_retries: 3
+
+# Tools the Executor agent is allowed to use
+executor_allowed_tools:
+  - Read
+  - Edit
+  - Write
+  - Bash
+  - Glob
+  - Grep
+
+# Whether to ask user confirmation before executing the plan
+confirm_plan: true
+
+# Whether to ask user confirmation before committing
+confirm_commit: true
+
+# Logging
+log_dir: "logs"
+log_level: "INFO"
