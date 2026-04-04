@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
+from orchestrator import executor, planner, reviewer
 from orchestrator.config import Config
-from orchestrator.models import CycleRecord
+from orchestrator.models import CycleRecord, CycleStatus
 
 
 async def run_cycle(task: str, config: Config) -> CycleRecord:
@@ -24,5 +27,38 @@ async def run_cycle(task: str, config: Config) -> CycleRecord:
     Returns:
         A CycleRecord summarizing the full cycle.
     """
-    # TODO: Implement in Phase 1.5
-    raise NotImplementedError("Orchestrator will be implemented in Phase 1.5")
+    record = CycleRecord(task=task, status=CycleStatus.PLANNED)
+
+    # 1. Plan
+    record.plan = await planner.generate_plan(task, config)
+
+    # 2-6. Execute → Review loop
+    feedback = ""
+    while record.attempt <= config.max_retries:
+        record.status = CycleStatus.EXECUTING
+        diff = await executor.execute_plan(record.plan, config, feedback=feedback)
+
+        record.status = CycleStatus.REVIEWING
+        record.review = await reviewer.review_code(record.plan, diff, config)
+
+        if record.review.approved:
+            record.status = CycleStatus.APPROVED
+            break
+
+        if record.attempt >= config.max_retries:
+            record.status = CycleStatus.ESCALATED
+            break
+
+        # Build feedback string for next attempt
+        feedback_lines = ["The reviewer rejected your implementation. Fix the following issues:"]
+        for issue in record.review.issues:
+            line = f"- [{issue.severity.value.upper()}] {issue.description}"
+            if issue.suggestion:
+                line += f" — Suggestion: {issue.suggestion}"
+            feedback_lines.append(line)
+        feedback = "\n".join(feedback_lines)
+
+        record.attempt += 1
+
+    record.finished_at = datetime.now().isoformat()
+    return record

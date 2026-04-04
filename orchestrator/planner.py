@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from anthropic import Anthropic
+from anthropic import AsyncAnthropic
 
 from orchestrator.config import Config
 from orchestrator.models import TaskPlan
@@ -29,8 +29,17 @@ async def generate_plan(task: str, config: Config, context: str = "") -> TaskPla
     Returns:
         A parsed TaskPlan ready for the Executor.
     """
-    # TODO: Implement in Phase 1.2
-    # 1. Build messages with system prompt + task + context
-    # 2. Call Anthropic Messages API (config.model)
-    # 3. Parse JSON response into TaskPlan
-    raise NotImplementedError("Planner will be implemented in Phase 1.2")
+    user_message = f"Task: {task}"
+    if context:
+        user_message += f"\n\nProject context:\n{context}"
+
+    client = AsyncAnthropic(api_key=config.api_key)
+    response = await client.messages.create(
+        model=config.model,
+        max_tokens=1024,
+        system=_load_system_prompt(),
+        messages=[{"role": "user", "content": user_message}],
+    )
+
+    raw = response.content[0].text
+    return TaskPlan.from_json(raw)

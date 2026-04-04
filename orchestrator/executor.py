@@ -2,8 +2,82 @@
 
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
+
+from claude_agent_sdk import ClaudeAgentOptions, query
+
 from orchestrator.config import Config
 from orchestrator.models import TaskPlan
+
+_CONTEXT_PATH = Path(__file__).resolve().parent / "prompts" / "executor_context.md"
+
+
+def _load_context() -> str:
+    if _CONTEXT_PATH.exists():
+        return _CONTEXT_PATH.read_text(encoding="utf-8")
+    return ""
+
+
+def _build_prompt(plan: TaskPlan, feedback: str) -> str:
+    context = _load_context()
+    parts = [context] if context else []
+
+    parts.append("## Plan\n")
+    parts.append(f"**Description:** {plan.description}\n")
+
+    if plan.files_to_create:
+        parts.append("**Files to create:** " + ", ".join(plan.files_to_create))
+    if plan.files_to_modify:
+        parts.append("**Files to modify:** " + ", ".join(plan.files_to_modify))
+
+    parts.append("\n**Steps:**")
+    for step in plan.steps:
+        parts.append(f"- {step}")
+
+    parts.append("\n**Acceptance criteria:**")
+    for criterion in plan.acceptance_criteria:
+        parts.append(f"- {criterion}")
+
+    if feedback:
+        parts.append("\n## Reviewer Feedback (fix these issues)\n")
+        parts.append(feedback)
+
+    return "\n".join(parts)
+
+
+def _get_diff(project_dir: str) -> str:
+    """Return unified diff of all uncommitted changes in the project directory."""
+    parts: list[str] = []
+
+    # Modified tracked files
+    tracked = subprocess.run(
+        ["git", "diff", "HEAD"],
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+    )
+    if tracked.stdout.strip():
+        parts.append(tracked.stdout)
+
+    # Untracked new files
+    untracked = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+    )
+    for filename in untracked.stdout.splitlines():
+        result = subprocess.run(
+            ["git", "diff", "--no-index", "/dev/null", filename],
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+        )
+        if result.stdout.strip():
+            parts.append(result.stdout)
+
+    return "\n".join(parts)
 
 
 async def execute_plan(
@@ -21,9 +95,15 @@ async def execute_plan(
     Returns:
         A unified diff string of all changes made.
     """
-    # TODO: Implement in Phase 1.3
-    # 1. Build executor prompt from plan + feedback
-    # 2. Call claude_agent_sdk.query() with allowed_tools
-    # 3. Capture created/modified files
-    # 4. Generate and return diff
-    raise NotImplementedError("Executor will be implemented in Phase 1.3")
+    prompt = _build_prompt(plan, feedback)
+
+    options = ClaudeAgentOptions(
+        allowed_tools=config.executor_allowed_tools,
+        cwd=config.project_dir,
+        permission_mode="bypassPermissions",
+    )
+
+    async for _ in query(prompt=prompt, options=options):
+        pass
+
+    return _get_diff(config.project_dir)
