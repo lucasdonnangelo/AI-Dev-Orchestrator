@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/c/Users/lucas/AppData/Roaming/Python/Python313/Scripts/orchestrate.exe --version)",
+      "Bash(/c/Users/lucas/AppData/Roaming/Python/Python313/Scripts/orchestrate.exe run:*)"
+    ]
+  }
+}
