@@ -24,3 +24,11 @@ Thumbs.db
 # Project
 logs/*.json
 logs/*.log
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# pip install artifacts (guard against ">=" quoting issues in bash)
+=*

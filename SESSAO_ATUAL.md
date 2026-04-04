@@ -1,141 +1,128 @@
-# Sessão Atual — AI Dev Orchestrator
+# Sessao Atual — AI Dev Orchestrator
 
-**Última atualização:** 04/04/2026  
+**Ultima atualizacao:** 04/04/2026
 **Branch:** main
 
 ---
 
-## O que é o projeto
-
-CLI Python que automatiza o ciclo de desenvolvimento com 3 agentes de IA:
+## Fluxo atual (implementado)
 
 ```
-Você (task) → Planner → Executor → Reviewer → Aprovado? → Você confirma commit
-                                      ↑           ↓ NÃO
-                                      └───────────┘ (max 3x, depois escala pro humano)
+Voce (task)
+  --> Planner (Claude) gera plano v1
+  --> Critico (Gemini) avalia [min 2 rounds, max 5]
+        se nao consenso: Planner refina --> Critico reavalia
+  --> Plano Final
+  --> Executor (Claude Agent SDK) implementa
+        se reprovado (max 3x): Executor corrige com feedback
+  --> Reviewer (Gemini) avalia codigo
+  --> Aprovado --> Voce confirma commit
+  --> ESCALADO  --> Voce intervem manualmente
 ```
-
-| Agente | SDK | Papel |
-|--------|-----|-------|
-| Planner | `anthropic` Messages API | Decompõe a task em `TaskPlan` (JSON) |
-| Executor | `claude-agent-sdk` | Implementa o código no projeto-alvo |
-| Reviewer | `anthropic` Messages API | Avalia o diff e devolve `ReviewResult` |
 
 ---
 
 ## Status das fases
 
-| Fase | Descrição | Status |
+| Fase | Descricao | Status |
 |------|-----------|--------|
-| 1.1 | Setup do projeto | COMPLETA (commitada) |
-| 1.2 | Planner agent | COMPLETA (nao commitada) |
-| 1.3 | Executor agent | COMPLETA (nao commitada) |
-| 1.4 | Reviewer agent | COMPLETA (nao commitada) |
-| 1.5a | Orquestrador (`orchestrator.py`) | COMPLETA (nao commitada) |
-| 1.5b | CLI (`cli.py`) | COMPLETA (nao commitada) |
+| 1 — MVP | Planner + Executor + Reviewer + Orquestrador + CLI | COMPLETA |
+| 2.1 — Multi-Provider | BaseAgent, ClaudeProvider, GeminiProvider, OpenAIProvider, make_provider | COMPLETA |
+| 2.2 — Critico do Plano | critic.py, critic_system.md, planner.refine_plan, loop min/max rounds | COMPLETA |
+| 2.3 — Decisor | decisor.py, decisor_system.md, DecisionResult | PROXIMA |
+| 2.4 — SESSAO_ATUAL.md auto | Gerar/atualizar apos cada aprovacao | pendente |
+| 2.5 — Robustez | Retry de API, fix _get_diff Windows, fix diff no CLI | pendente |
+| 2.6 — Logging/Historico | logs/ JSON, orchestrate history/status | pendente |
+| 3+ | Multi-task, contexto inteligente, git avancado, metricas | pendente |
 
 ---
 
-## O que foi feito nesta sessão
+## Arquitetura atual
 
-### Correcoes de estrutura — commit `a9ecdaa`
+### Providers (`orchestrator/providers/`)
 
-O commit inicial (`508f14d`) criou todos os arquivos na raiz do projeto em vez
-de dentro do pacote `orchestrator/`. Corrigido:
+```
+BaseAgent (ABC)
+  async call(prompt, system) -> str
 
-- Movidos para `orchestrator/`: todos os módulos Python
-- Movidos para `orchestrator/prompts/`: os 3 system prompts
-- Movido para `configs/`: `default.yaml`
-- `gitignore` renomeado para `.gitignore`
-- Emojis removidos do `cli.py` (incompatíveis com cp1252 no Windows terminal)
+ClaudeProvider   -- anthropic SDK (AsyncAnthropic)
+GeminiProvider   -- google-genai SDK (client.aio.models.generate_content)
+OpenAIProvider   -- openai SDK (AsyncOpenAI) [fallback, nao usado por padrao]
 
-### Fase 1.2 — Planner (`orchestrator/planner.py`)
+make_provider(name, config) -> BaseAgent
+  "anthropic" -> ClaudeProvider(config.api_key, config.model)
+  "google"    -> GeminiProvider(config.google_api_key, config.google_model)
+  "openai"    -> OpenAIProvider(config.openai_api_key, config.openai_model)
+```
 
-- Usa `AsyncAnthropic` (cliente async do SDK)
-- Monta user message com task + contexto opcional do projeto
-- Chama `client.messages.create()` com o system prompt de `prompts/planner_system.md`
-- Parseia resposta JSON em `TaskPlan` via `TaskPlan.from_json()`
-- Testado: gerou `TaskPlan` valido para "Criar endpoint GET /health"
+### Agentes
 
-### Fase 1.3 — Executor (`orchestrator/executor.py`)
+| Agente | Arquivo | Provider configuravel |
+|--------|---------|----------------------|
+| Planner | `planner.py` | `config.planner_provider` (default: anthropic) |
+| Critico | `critic.py` | `config.critic_provider` (default: google) |
+| Executor | `executor.py` | sempre Claude Agent SDK |
+| Reviewer | `reviewer.py` | `config.reviewer_provider` (default: google) |
+| Decisor | `decisor.py` | `config.decisor_provider` (default: google) [NAO IMPL] |
 
-- `_build_prompt()`: monta o prompt a partir do `TaskPlan` + contexto do executor + feedback opcional
-- `_get_diff()`: captura diff de arquivos modificados (`git diff HEAD`) e arquivos novos não rastreados (`git ls-files --others` + `git diff --no-index`)
-- `execute_plan()`: chama `claude_agent_sdk.query()` com `allowed_tools`, `cwd` e `permission_mode="bypassPermissions"`
-- Testado: criou `hello.py` no projeto cobaia e retornou diff unificado correto
+### Config (campos relevantes)
 
-### Fase 1.4 — Reviewer (`orchestrator/reviewer.py`)
+```
+ANTHROPIC_API_KEY     -- obrigatorio
+GOOGLE_API_KEY        -- obrigatorio (Critico + Reviewer usam Gemini)
+OPENAI_API_KEY        -- opcional (fallback)
 
-- Monta user message com o plano (JSON) + diff como bloco de código
-- Chama `AsyncAnthropic.messages.create()` com system prompt de `prompts/reviewer_system.md`
-- Trata markdown fences caso o modelo embrulhe o JSON
-- Parseia resposta em `ReviewResult` via `ReviewResult.from_dict()`
-- Testado caminho de aprovação (score 10) e rejeição (score 2, 2 issues críticos)
+PLANNER_PROVIDER=anthropic
+CRITIC_PROVIDER=google
+REVIEWER_PROVIDER=google
+DECISOR_PROVIDER=google
+
+GOOGLE_MODEL=gemini-2.5-flash
+CRITIC_MIN_ROUNDS=2
+CRITIC_MAX_ROUNDS=5
+ORCHESTRATOR_MAX_RETRIES=3
+```
+
+### Modelos de dados (`models.py`)
+
+```python
+TaskPlan       -- description, files_to_create, files_to_modify, steps,
+                  acceptance_criteria, estimated_complexity
+CriticResult   -- consensus, observations, suggestions, score, round
+ReviewResult   -- approved, score, issues (list[ReviewIssue]), suggestions, summary
+ReviewIssue    -- severity, description, file, line, suggestion
+CycleRecord    -- task, status, plan, review, attempt, started_at, finished_at, commit_hash
+# pendente:
+DecisionResult -- approved, reasoning, inconsistencies
+```
 
 ---
 
-### Fase 1.5a — Orquestrador (`orchestrator/orchestrator.py`)
+## Proximos passos imediatos
 
-- Cria `CycleRecord` com status `PLANNED`
-- Chama `planner.generate_plan()` e armazena o plano
-- Loop `while attempt <= max_retries`:
-  - Status `EXECUTING` → chama `executor.execute_plan()` (com feedback nas tentativas seguintes)
-  - Status `REVIEWING` → chama `reviewer.review_code()`
-  - Aprovado → status `APPROVED`, sai do loop
-  - Reprovado e ainda tem tentativas → monta feedback string com as issues e incrementa attempt
-  - Esgotou tentativas → status `ESCALATED`
-- Preenche `finished_at` antes de retornar
-- Testado: caminho aprovado (attempt=1, APPROVED) e esgotado (attempt=2, ESCALATED)
+1. **2.3 — Decisor:** `decisor.py` + `decisor_system.md` + `DecisionResult` + integrar no orchestrator.py
+2. **2.4 — SESSAO_ATUAL.md auto:** gerar/atualizar este arquivo apos cada aprovacao
+3. **2.5 — Robustez:** retry de API, fix `_get_diff` Windows (`/dev/null` -> `NUL`), fix exibicao de diff no CLI
+4. **2.6 — Logging:** salvar execucoes em `logs/` (JSON), implementar `orchestrate history` e `orchestrate status`
 
-### Fase 1.5b — CLI (`orchestrator/cli.py`)
+---
 
-- `_display_plan()`: exibe files e steps em Panel azul
-- `_display_review()`: exibe score e summary em Panel verde (aprovado) ou vermelho (reprovado)
-- `_display_issues()`: lista issues com severidade quando ESCALATED
-- `_commit()`: roda `git add . && git commit -m` via subprocess no `project_dir`
-- `_run()`: corrotina principal — chama `orch.run_cycle()`, exibe plano, review e diff, pede confirmacao
-- `run`: envolve `_run` com `asyncio.run()`, trata `anthropic.APIError` e `KeyboardInterrupt`
-- Testado end-to-end no projeto cobaia: tarefa planejada, implementada, aprovada (score 9) e commitada automaticamente
+## Como rodar
 
-## Situacao atual — MVP COMPLETO
+```bash
+# Instalar dependencias
+pip install -e .
 
-**Todas as fases do MVP (1.1 a 1.5) estao implementadas e testadas.**  
-Nenhuma das mudancas foi commitada ainda — aguardando revisao e liberacao.
+# Rodar uma task
+python -m orchestrator.cli run "sua task aqui" -d /caminho/do/projeto -y
 
-## Proximo passo — Fases 2 e 3 (pos-MVP)
-
-### Fases 2 e 3 (pos-MVP)
-
-- **Fase 2:** logging em JSON, config por projeto (`.orchestrator.yaml`), retry em erros de API, UX com progress bars
-- **Fase 3:** batch de tasks, templates de projeto, integracao Git avancada, metricas de custo
+# Rodar testes unitarios
+pytest tests/ -v
+```
 
 ---
 
 ## Projeto cobaia
 
-Para testar o orquestrador: "Task Tracker CLI" (~5 arquivos, ~200 linhas).
-Tasks de teste em `docs/AI_Dev_Orchestrator_Plano.md`.
-
----
-
-## Como rodar o que ja funciona
-
-```bash
-# CLI
-orchestrate --version
-orchestrate run "sua task aqui"
-
-# Planner isolado
-python -c "
-import asyncio
-from orchestrator.config import Config
-from orchestrator.planner import generate_plan
-
-async def main():
-    config = Config.load('.')
-    plan = await generate_plan('sua task aqui', config)
-    print(plan.to_json(indent=2))
-
-asyncio.run(main())
-"
-```
+Pasta `cobaia/` na raiz — projeto Git separado usado para testar o orquestrador.
+Contem: `main.py`, `hello.py`, `add.py`, `multiply.py`, `subtract.py` e respectivos testes pytest.
