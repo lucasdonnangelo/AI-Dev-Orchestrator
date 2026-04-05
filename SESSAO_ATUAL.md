@@ -9,14 +9,16 @@
 
 ```
 Voce (task)
-  --> Planner (Claude) gera plano v1
-  --> Critico (Gemini) avalia [min 2 rounds, max 5]
+  --> Planner (Claude) gera plano v1          [recebe session_context]
+  --> Critico (Gemini) avalia [min 2, max 5 rounds]  [recebe session_context]
         se nao consenso: Planner refina --> Critico reavalia
   --> Plano Final
   --> Executor (Claude Agent SDK) implementa
         se reprovado (max 3x): Executor corrige com feedback
-  --> Reviewer (Gemini) avalia codigo
-  --> Aprovado --> Voce confirma commit
+  --> Reviewer (Gemini) avalia codigo         [recebe session_context]
+  --> Decisor (Gemini) valida coerencia com plano  [recebe session_context]
+  --> Aprovado --> SESSAO_ATUAL.md atualizado automaticamente
+               --> Voce confirma commit
   --> ESCALADO  --> Voce intervem manualmente
 ```
 
@@ -29,11 +31,20 @@ Voce (task)
 | 1 — MVP | Planner + Executor + Reviewer + Orquestrador + CLI | COMPLETA |
 | 2.1 — Multi-Provider | BaseAgent, ClaudeProvider, GeminiProvider, OpenAIProvider, make_provider | COMPLETA |
 | 2.2 — Critico do Plano | critic.py, critic_system.md, planner.refine_plan, loop min/max rounds | COMPLETA |
-| 2.3 — Decisor | decisor.py, decisor_system.md, DecisionResult | PROXIMA |
-| 2.4 — SESSAO_ATUAL.md auto | Gerar/atualizar apos cada aprovacao | pendente |
-| 2.5 — Robustez | Retry de API, fix _get_diff Windows, fix diff no CLI | pendente |
+| 2.3 — Decisor | decisor.py, decisor_system.md, DecisionResult, integrado no orchestrator.py | COMPLETA |
+| 2.4 — SESSAO_ATUAL.md auto | session.py, session_update_system.md, load/update em todos os agentes | COMPLETA |
+| 2.5 — Robustez | Retry de API, fix _get_diff Windows, fix diff no CLI | PROXIMA |
 | 2.6 — Logging/Historico | logs/ JSON, orchestrate history/status | pendente |
 | 3+ | Multi-task, contexto inteligente, git avancado, metricas | pendente |
+
+---
+
+## Ultima tarefa aprovada
+
+**Tarefa:** Fase 2.4 — SESSAO_ATUAL.md automatizado
+**Arquivos criados:** orchestrator/session.py, orchestrator/prompts/session_update_system.md, tests/test_session.py
+**Arquivos modificados:** orchestrator/planner.py, orchestrator/critic.py, orchestrator/reviewer.py, orchestrator/orchestrator.py
+**Resumo:** Implementado modulo session.py com load() e update(). O SESSAO_ATUAL.md e carregado uma vez por ciclo e injetado como contexto em todos os agentes (Planner, Critico, Reviewer, Decisor). Apos aprovacao completa (Reviewer + Decisor), a IA atualiza o arquivo automaticamente.
 
 ---
 
@@ -57,19 +68,31 @@ make_provider(name, config) -> BaseAgent
 
 ### Agentes
 
-| Agente | Arquivo | Provider configuravel |
-|--------|---------|----------------------|
-| Planner | `planner.py` | `config.planner_provider` (default: anthropic) |
-| Critico | `critic.py` | `config.critic_provider` (default: google) |
-| Executor | `executor.py` | sempre Claude Agent SDK |
-| Reviewer | `reviewer.py` | `config.reviewer_provider` (default: google) |
-| Decisor | `decisor.py` | `config.decisor_provider` (default: google) [NAO IMPL] |
+| Agente | Arquivo | Provider configuravel | Recebe session_context |
+|--------|---------|----------------------|------------------------|
+| Planner | `planner.py` | `config.planner_provider` (default: anthropic) | sim |
+| Critico | `critic.py` | `config.critic_provider` (default: google) | sim |
+| Executor | `executor.py` | sempre Claude Agent SDK | nao |
+| Reviewer | `reviewer.py` | `config.reviewer_provider` (default: google) | sim |
+| Decisor | `decisor.py` | `config.decisor_provider` (default: google) | sim |
+
+### Session (`orchestrator/session.py`)
+
+```
+session.load() -> str
+  Le SESSAO_ATUAL.md da raiz do projeto
+  Retorna string vazia se nao existir
+
+session.update(task, plan, diff, review, decision, config) -> None
+  Usa decisor_provider para gerar novo SESSAO_ATUAL.md
+  Chamado automaticamente apos cada aprovacao completa (Reviewer + Decisor ok)
+```
 
 ### Config (campos relevantes)
 
 ```
 ANTHROPIC_API_KEY     -- obrigatorio
-GOOGLE_API_KEY        -- obrigatorio (Critico + Reviewer usam Gemini)
+GOOGLE_API_KEY        -- obrigatorio (Critico + Reviewer + Decisor usam Gemini)
 OPENAI_API_KEY        -- opcional (fallback)
 
 PLANNER_PROVIDER=anthropic
@@ -91,19 +114,18 @@ TaskPlan       -- description, files_to_create, files_to_modify, steps,
 CriticResult   -- consensus, observations, suggestions, score, round
 ReviewResult   -- approved, score, issues (list[ReviewIssue]), suggestions, summary
 ReviewIssue    -- severity, description, file, line, suggestion
-CycleRecord    -- task, status, plan, review, attempt, started_at, finished_at, commit_hash
-# pendente:
 DecisionResult -- approved, reasoning, inconsistencies
+CycleRecord    -- task, status, plan, review, decision, attempt,
+                  started_at, finished_at, commit_hash
 ```
 
 ---
 
 ## Proximos passos imediatos
 
-1. **2.3 — Decisor:** `decisor.py` + `decisor_system.md` + `DecisionResult` + integrar no orchestrator.py
-2. **2.4 — SESSAO_ATUAL.md auto:** gerar/atualizar este arquivo apos cada aprovacao
-3. **2.5 — Robustez:** retry de API, fix `_get_diff` Windows (`/dev/null` -> `NUL`), fix exibicao de diff no CLI
-4. **2.6 — Logging:** salvar execucoes em `logs/` (JSON), implementar `orchestrate history` e `orchestrate status`
+1. **2.5 — Robustez:** retry de API com backoff, fix `_get_diff` Windows (`/dev/null` -> `NUL`), fix exibicao de diff no CLI
+2. **2.6 — Logging:** salvar execucoes em `logs/` (JSON), implementar `orchestrate history` e `orchestrate status`
+3. **Testar ciclo completo** com projeto cobaia usando o fluxo completo (Planner -> Critico -> Executor -> Reviewer -> Decisor -> session.update)
 
 ---
 
