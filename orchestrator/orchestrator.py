@@ -1,26 +1,31 @@
-"""Orchestrator — connects Planner → Critic → Executor → Reviewer → Decisor."""
+"""Orchestrator — connects Planner -> Critic -> Executor -> Reviewer -> Decisor."""
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from orchestrator import critic, decisor, executor, planner, reviewer
+from rich.console import Console
+
+from orchestrator import critic, decisor, executor, planner, reviewer, session
 from orchestrator.config import Config
 from orchestrator.models import CycleRecord, CycleStatus, DecisionResult
+
+console = Console(highlight=False)
 
 
 async def run_cycle(task: str, config: Config) -> tuple[CycleRecord, str, DecisionResult | None]:
     """Execute a full orchestration cycle for the given task.
 
     Flow:
-        1. Planner generates a TaskPlan
-        2. Critic loop refines the plan (min 2, max 5 rounds)
-        3. Executor implements the refined plan
-        4. Reviewer evaluates the result
-        5. If rejected and attempts < max_retries → re-execute with feedback
-        6. If approved → Decisor validates coherence with plan
-        7. If Decisor rejects → escalate to user
-        8. If Decisor approves → return record for user to confirm commit
+        1. Load SESSAO_ATUAL.md for shared context
+        2. Planner generates a TaskPlan (with session context)
+        3. Critic loop refines the plan (with session context)
+        4. Executor implements the refined plan
+        5. Reviewer evaluates the result (with session context)
+        6. If rejected and attempts < max_retries -> re-execute with feedback
+        7. If approved -> Decisor validates coherence with plan
+        8. If Decisor approves -> update SESSAO_ATUAL.md, return record
+        9. If Decisor rejects -> escalate to user
 
     Args:
         task: Natural-language description of the task.
@@ -28,26 +33,31 @@ async def run_cycle(task: str, config: Config) -> tuple[CycleRecord, str, Decisi
 
     Returns:
         A tuple of (CycleRecord, diff string, DecisionResult | None).
-        DecisionResult is None only when the cycle is escalated before reaching the Decisor.
+        DecisionResult is None only when escalated before reaching the Decisor.
     """
     record = CycleRecord(task=task, status=CycleStatus.PLANNED)
     last_diff = ""
     decision: DecisionResult | None = None
 
-    # 1. Plan
-    record.plan = await planner.generate_plan(task, config)
+    # 1. Load session context once — shared by all agents this cycle
+    session_ctx = session.load()
 
-    # 2. Critic loop — refine plan before execution
-    record.plan = await critic.run_critic_loop(task, record.plan, config)
+    # 2. Plan
+    record.plan = await planner.generate_plan(task, config, session_context=session_ctx)
 
-    # 3-5. Execute → Review loop
+    # 3. Critic loop — refine plan before execution
+    record.plan = await critic.run_critic_loop(task, record.plan, config, session_context=session_ctx)
+
+    # 4-6. Execute -> Review loop
     feedback = ""
     while record.attempt <= config.max_retries:
         record.status = CycleStatus.EXECUTING
         last_diff = await executor.execute_plan(record.plan, config, feedback=feedback)
 
         record.status = CycleStatus.REVIEWING
-        record.review = await reviewer.review_code(record.plan, last_diff, config)
+        record.review = await reviewer.review_code(
+            record.plan, last_diff, config, session_context=session_ctx
+        )
 
         if record.review.approved:
             break
@@ -68,12 +78,20 @@ async def run_cycle(task: str, config: Config) -> tuple[CycleRecord, str, Decisi
 
         record.attempt += 1
 
-    # 6. Decisor — validate coherence with plan
-    decision = await decisor.decide(record.plan, last_diff, record.review, config)
+    # 7. Decisor — validate coherence with plan
+    decision = await decisor.decide(
+        record.plan, last_diff, record.review, config, session_context=session_ctx
+    )
     record.decision = decision
 
     if decision.approved:
         record.status = CycleStatus.APPROVED
+        # 8. Update SESSAO_ATUAL.md — only on full approval
+        try:
+            await session.update(task, record.plan, last_diff, record.review, decision, config)
+            console.print("[dim]  Session updated — SESSAO_ATUAL.md[/dim]")
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[yellow][!] Could not update SESSAO_ATUAL.md: {exc}[/yellow]")
     else:
         record.status = CycleStatus.ESCALATED
 

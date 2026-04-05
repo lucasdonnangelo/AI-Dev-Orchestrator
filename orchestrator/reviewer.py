@@ -33,6 +33,7 @@ async def review_code(
     plan: TaskPlan,
     diff: str,
     config: Config,
+    session_context: str = "",
 ) -> ReviewResult:
     """Review the code changes using the configured reviewer provider.
 
@@ -40,11 +41,15 @@ async def review_code(
         plan: The original TaskPlan (for context).
         diff: Unified diff of the changes to review.
         config: Resolved orchestrator configuration.
+        session_context: Contents of SESSAO_ATUAL.md for project-state awareness.
 
     Returns:
         A parsed ReviewResult with approval status, score, and issues.
     """
-    user_message = (
+    user_message = ""
+    if session_context:
+        user_message += f"## Session Context (current project state)\n\n{session_context}\n\n"
+    user_message += (
         f"## Original Plan\n\n{plan.to_json(indent=2)}\n\n"
         f"## Code Diff\n\n```diff\n{diff}\n```"
     )

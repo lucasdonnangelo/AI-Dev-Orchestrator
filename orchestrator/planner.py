@@ -21,20 +21,28 @@ def _load_system_prompt() -> str:
     return "You are a software planning assistant."
 
 
-async def generate_plan(task: str, config: Config, context: str = "") -> TaskPlan:
+async def generate_plan(
+    task: str,
+    config: Config,
+    context: str = "",
+    session_context: str = "",
+) -> TaskPlan:
     """Generate a TaskPlan for the given task using the configured planner provider.
 
     Args:
         task: Natural-language description of what needs to be done.
         config: Resolved orchestrator configuration.
         context: Optional extra context (e.g. repo structure, README).
+        session_context: Contents of SESSAO_ATUAL.md for project-state awareness.
 
     Returns:
         A parsed TaskPlan ready for the Executor.
     """
     user_message = f"Task: {task}"
+    if session_context:
+        user_message += f"\n\n## Session Context (current project state)\n\n{session_context}"
     if context:
-        user_message += f"\n\nProject context:\n{context}"
+        user_message += f"\n\n## Project Context\n\n{context}"
 
     provider = make_provider(config.planner_provider, config)
     raw = await provider.call(prompt=user_message, system=_load_system_prompt())
