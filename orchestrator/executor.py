@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -69,7 +70,7 @@ def _get_diff(project_dir: str) -> str:
     )
     for filename in untracked.stdout.splitlines():
         result = subprocess.run(
-            ["git", "diff", "--no-index", "/dev/null", filename],
+            ["git", "diff", "--no-index", os.devnull, filename],
             cwd=project_dir,
             capture_output=True,
             text=True,

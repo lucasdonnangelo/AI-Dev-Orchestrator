@@ -13,7 +13,9 @@
       "Bash(python -m orchestrator.cli --version)",
       "Bash(python -m orchestrator.cli run \"Criar uma funcao hello\\(\\) que recebe um nome e retorna 'Hello, nome!'\" -d cobaia -y)",
       "Bash(REVIEWER_PROVIDER=anthropic CRITIC_PROVIDER=anthropic DECISOR_PROVIDER=anthropic python -m orchestrator.cli run \"Adicionar uma funcao add\\(a, b\\) que retorna a soma de dois numeros\" -d cobaia -y)",
-      "Bash(python -m pytest tests/ -v)"
+      "Bash(python -m pytest tests/ -v)",
+      "Bash(python -m pytest tests/ -q)",
+      "Bash(python -m pytest tests/test_retry.py tests/test_providers.py -v)"
     ]
   }
 }
