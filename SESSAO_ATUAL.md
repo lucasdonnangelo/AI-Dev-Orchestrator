@@ -33,18 +33,49 @@ Voce (task)
 | 2.2 — Critico do Plano | critic.py, critic_system.md, planner.refine_plan, loop min/max rounds | COMPLETA |
 | 2.3 — Decisor | decisor.py, decisor_system.md, DecisionResult, integrado no orchestrator.py | COMPLETA |
 | 2.4 — SESSAO_ATUAL.md auto | session.py, session_update_system.md, load/update em todos os agentes | COMPLETA |
-| 2.5 — Robustez | Retry de API, fix _get_diff Windows, fix diff no CLI | PROXIMA |
-| 2.6 — Logging/Historico | logs/ JSON, orchestrate history/status | pendente |
+| 2.5 — Robustez | retry com backoff, fix _get_diff Windows (os.devnull), fix diff no CLI | COMPLETA |
+| 2.6 — Logging/Historico | logger.py, orchestrate history/status, commit hash | COMPLETA |
 | 3+ | Multi-task, contexto inteligente, git avancado, metricas | pendente |
 
 ---
 
 ## Ultima tarefa aprovada
 
-**Tarefa:** Fase 2.4 — SESSAO_ATUAL.md automatizado
-**Arquivos criados:** orchestrator/session.py, orchestrator/prompts/session_update_system.md, tests/test_session.py
-**Arquivos modificados:** orchestrator/planner.py, orchestrator/critic.py, orchestrator/reviewer.py, orchestrator/orchestrator.py
-**Resumo:** Implementado modulo session.py com load() e update(). O SESSAO_ATUAL.md e carregado uma vez por ciclo e injetado como contexto em todos os agentes (Planner, Critico, Reviewer, Decisor). Apos aprovacao completa (Reviewer + Decisor), a IA atualiza o arquivo automaticamente.
+**Tarefa:** Fase 2.6 + correcoes do teste end-to-end
+**Commit:** 2fcebef
+
+**Arquivos criados:**
+- orchestrator/logger.py
+- tests/test_logger.py
+
+**Arquivos modificados:**
+- orchestrator/cli.py — logger integrado, commit hash capturado, `orchestrate history` e `orchestrate status` implementados
+- orchestrator/providers/retry.py — parametros `delay_extractor` e `max_retry_delay`
+- orchestrator/providers/google.py — `_extract_gemini_delay` para extrair retryDelay do 429 Gemini
+- orchestrator/prompts/executor_context.md — instrucao para examinar convencoes do projeto antes de criar arquivos
+- cobaia/divide.py + cobaia/test_divide.py — funcao divide com protecao contra divisao por zero
+
+**Resultado dos testes:** 104 passed (orchestrator) + 28 passed (cobaia)
+
+---
+
+## Teste end-to-end executado
+
+Ciclo completo rodado contra o projeto cobaia com a task:
+"Criar uma funcao divide(a, b) que retorna a divisao de dois numeros, com protecao contra divisao por zero"
+
+**O que funcionou:**
+- Planner gerou plano estruturado
+- Critic rodou 2 rounds com consenso (score 9/10)
+- Executor criou os arquivos corretos
+- Reviewer identificou bug de import (validacao funcionou)
+- Retry logic ativou ao encontrar 429
+- Logger salvou registro do ciclo escalado
+
+**Bugs encontrados e corrigidos:**
+1. Executor usava `from cobaia.divide import divide` em vez de `from divide import divide` — corrigido via executor_context.md
+2. Retry delay ignorava o `retryDelay` informado pela API Gemini — corrigido com `_extract_gemini_delay`
+3. Quota diaria Gemini free tier (20 req/dia) esgotada durante o teste — sistema agora detecta e nao tenta retry nesses casos
 
 ---
 
@@ -56,14 +87,15 @@ Voce (task)
 BaseAgent (ABC)
   async call(prompt, system) -> str
 
-ClaudeProvider   -- anthropic SDK (AsyncAnthropic)
-GeminiProvider   -- google-genai SDK (client.aio.models.generate_content)
-OpenAIProvider   -- openai SDK (AsyncOpenAI) [fallback, nao usado por padrao]
+ClaudeProvider   -- anthropic SDK (AsyncAnthropic) + retry (RateLimitError, APITimeoutError, InternalServerError)
+GeminiProvider   -- google-genai SDK + retry com _extract_gemini_delay (respeita retryDelay da API)
+OpenAIProvider   -- openai SDK (AsyncOpenAI) + retry (RateLimitError, APITimeoutError, InternalServerError)
+
+call_with_retry(fn, *, max_attempts, base_delay, max_delay, retryable, delay_extractor, max_retry_delay)
+  -- delay_extractor: extrai delay real da excecao (ex: retryDelay do Gemini 429)
+  -- max_retry_delay: se delay > limite, re-raise imediato (quota diaria esgotada)
 
 make_provider(name, config) -> BaseAgent
-  "anthropic" -> ClaudeProvider(config.api_key, config.model)
-  "google"    -> GeminiProvider(config.google_api_key, config.google_model)
-  "openai"    -> OpenAIProvider(config.openai_api_key, config.openai_model)
 ```
 
 ### Agentes
@@ -76,16 +108,21 @@ make_provider(name, config) -> BaseAgent
 | Reviewer | `reviewer.py` | `config.reviewer_provider` (default: google) | sim |
 | Decisor | `decisor.py` | `config.decisor_provider` (default: google) | sim |
 
-### Session (`orchestrator/session.py`)
+### Logger (`orchestrator/logger.py`)
 
 ```
-session.load() -> str
-  Le SESSAO_ATUAL.md da raiz do projeto
-  Retorna string vazia se nao existir
+logger.save(record, diff, log_dir) -> Path
+  Salva CycleRecord + diff em logs/YYYYMMDD_HHMMSS_ffffff_<slug>.json
+  Chamado pelo CLI em todos os caminhos (aprovado, escalado por Reviewer, escalado por Decisor)
 
-session.update(task, plan, diff, review, decision, config) -> None
-  Usa decisor_provider para gerar novo SESSAO_ATUAL.md
-  Chamado automaticamente apos cada aprovacao completa (Reviewer + Decisor ok)
+logger.list_runs(log_dir, limit) -> list[dict]
+  Lista execucoes mais recentes (newest-first por nome de arquivo)
+
+logger.load_last(log_dir) -> dict | None
+  Retorna a execucao mais recente
+
+orchestrate history --log-dir logs -n 20   -- tabela com as ultimas N execucoes
+orchestrate status  --log-dir logs          -- painel detalhado da ultima execucao
 ```
 
 ### Config (campos relevantes)
@@ -123,9 +160,10 @@ CycleRecord    -- task, status, plan, review, decision, attempt,
 
 ## Proximos passos imediatos
 
-1. **2.5 — Robustez:** retry de API com backoff, fix `_get_diff` Windows (`/dev/null` -> `NUL`), fix exibicao de diff no CLI
-2. **2.6 — Logging:** salvar execucoes em `logs/` (JSON), implementar `orchestrate history` e `orchestrate status`
-3. **Testar ciclo completo** com projeto cobaia usando o fluxo completo (Planner -> Critico -> Executor -> Reviewer -> Decisor -> session.update)
+1. **Fase 3.1 — Contexto Inteligente:** carregar README, estrutura de pastas e arquivos relevantes como contexto automatico
+2. **Fase 3.2 — Multi-task (Batch):** aceitar arquivo com lista de tasks, executar sequencialmente
+3. **Fase 3.3 — Git Avancado:** branch por task, Conventional Commits, PR description
+4. **Testar ciclo end-to-end completo** apos reset da quota Gemini (free tier: 20 req/dia)
 
 ---
 
@@ -138,6 +176,12 @@ pip install -e .
 # Rodar uma task
 python -m orchestrator.cli run "sua task aqui" -d /caminho/do/projeto -y
 
+# Ver ultima execucao
+python -m orchestrator.cli status
+
+# Ver historico
+python -m orchestrator.cli history -n 10
+
 # Rodar testes unitarios
 pytest tests/ -v
 ```
@@ -146,5 +190,5 @@ pytest tests/ -v
 
 ## Projeto cobaia
 
-Pasta `cobaia/` na raiz — projeto Git separado usado para testar o orquestrador.
-Contem: `main.py`, `hello.py`, `add.py`, `multiply.py`, `subtract.py` e respectivos testes pytest.
+Pasta `cobaia/` na raiz — submodulo Git separado usado para testar o orquestrador.
+Contem: `main.py`, `hello.py`, `add.py`, `multiply.py`, `subtract.py`, `divide.py` e respectivos testes pytest.
