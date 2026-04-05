@@ -11,10 +11,12 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.rule import Rule
 from rich.syntax import Syntax
+from rich.table import Table
 
 from orchestrator import __version__
 from orchestrator.config import Config
 from orchestrator.models import CycleStatus
+from orchestrator import logger as log_store
 from orchestrator import orchestrator as orch
 from orchestrator.models import DecisionResult
 
@@ -77,14 +79,21 @@ def _display_issues(record) -> None:
             console.print(f"         Suggestion: {issue.suggestion}")
 
 
-def _commit(project_dir: str, message: str) -> bool:
+def _commit(project_dir: str, message: str) -> str | None:
+    """Run git add + commit. Returns the new commit hash on success, None on failure."""
     try:
         subprocess.run(["git", "add", "."], cwd=project_dir, check=True)
         subprocess.run(["git", "commit", "-m", message], cwd=project_dir, check=True)
-        return True
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip() or None
     except subprocess.CalledProcessError as e:
         console.print(f"[red]ERROR[/red] git failed: {e}")
-        return False
+        return None
 
 
 async def _run(task: str, config: Config, yes: bool) -> None:
@@ -102,6 +111,7 @@ async def _run(task: str, config: Config, yes: bool) -> None:
         )
         _display_issues(record)
         console.print("[yellow]Manual intervention required.[/yellow]")
+        log_store.save(record, diff, config.log_dir)
         raise SystemExit(1)
 
     # Reviewer approved — show review
@@ -115,6 +125,7 @@ async def _run(task: str, config: Config, yes: bool) -> None:
         # Decisor rejected
         console.print("\n[red][!] Decisor rejected — implementation diverges from plan.[/red]")
         console.print("[yellow]Manual intervention required.[/yellow]")
+        log_store.save(record, diff, config.log_dir)
         raise SystemExit(1)
 
     # Show diff
@@ -125,12 +136,17 @@ async def _run(task: str, config: Config, yes: bool) -> None:
     # Commit confirmation
     if yes or click.confirm("\nConfirm commit?", default=True):
         commit_msg = f"feat: {task[:72]}"
-        if _commit(config.project_dir, commit_msg):
-            console.print(f"[green][OK] Committed:[/green] {commit_msg}")
+        commit_hash = _commit(config.project_dir, commit_msg)
+        if commit_hash:
+            record.commit_hash = commit_hash
+            console.print(f"[green][OK] Committed:[/green] {commit_msg} ({commit_hash})")
         else:
+            log_store.save(record, diff, config.log_dir)
             raise SystemExit(1)
     else:
         console.print("[yellow]Commit skipped.[/yellow]")
+
+    log_store.save(record, diff, config.log_dir)
 
 
 @click.group()
@@ -176,17 +192,132 @@ def run(task: str, project_dir: str, plan_file: str | None, yes: bool, verbose: 
 
 
 @cli.command()
-def status() -> None:
-    """Show the status of the last orchestration run."""
-    # TODO: Phase 2.2
-    console.print("[yellow]! Not yet implemented (Phase 2.2)[/yellow]")
+@click.option(
+    "--log-dir",
+    default="logs",
+    show_default=True,
+    help="Directory containing log files.",
+)
+def status(log_dir: str) -> None:
+    """Show the details of the last orchestration run."""
+    entry = log_store.load_last(log_dir)
+    if entry is None:
+        console.print("[yellow]No runs found in logs/[/yellow]")
+        return
+
+    status_val = entry.get("status", "?")
+    color = "green" if status_val == "approved" else "red"
+    task = entry.get("task", "")
+    started = entry.get("started_at", "")[:19].replace("T", " ")
+    finished = (entry.get("finished_at") or "")[:19].replace("T", " ")
+    commit = entry.get("commit_hash") or "—"
+
+    header = (
+        f"[{color}]{status_val.upper()}[/{color}]  "
+        f"[bold]{task}[/bold]\n"
+        f"[dim]Started: {started}  Finished: {finished}  Commit: {commit}[/dim]"
+    )
+    console.print(Panel(header, title="Last Run", border_style=color))
+
+    # Plan summary
+    plan = entry.get("plan")
+    if plan:
+        lines = []
+        if plan.get("files_to_create"):
+            lines.append("Create: " + ", ".join(plan["files_to_create"]))
+        if plan.get("files_to_modify"):
+            lines.append("Modify: " + ", ".join(plan["files_to_modify"]))
+        lines.append(f"Complexity: {plan.get('estimated_complexity', '?')}")
+        console.print(Panel("\n".join(lines), title="Plan", border_style="blue"))
+
+    # Review
+    review = entry.get("review")
+    if review:
+        approved = review.get("approved", False)
+        score = review.get("score", "?")
+        summary = review.get("summary", "")
+        r_color = "green" if approved else "red"
+        r_status = "[OK]" if approved else "[X]"
+        console.print(
+            Panel(
+                f"[{r_color}]{r_status} Score: {score}/10[/{r_color}]\n{summary}",
+                title="Review",
+                border_style=r_color,
+            )
+        )
+
+    # Decision
+    decision = entry.get("decision")
+    if decision:
+        approved = decision.get("approved", False)
+        d_color = "green" if approved else "red"
+        d_status = "[OK]" if approved else "[X]"
+        body = f"[{d_color}]{d_status}[/{d_color}] {decision.get('reasoning', '')}"
+        if decision.get("inconsistencies"):
+            body += "\nInconsistencies: " + "; ".join(decision["inconsistencies"])
+        console.print(Panel(body, title="Decisor", border_style=d_color))
+
+    # Diff
+    diff = entry.get("diff", "")
+    if diff.strip():
+        console.print(Rule("Diff", style="blue"))
+        console.print(Syntax(diff, "diff", theme="monokai"))
 
 
 @cli.command()
-def history() -> None:
-    """List past orchestration runs."""
-    # TODO: Phase 2.2
-    console.print("[yellow]! Not yet implemented (Phase 2.2)[/yellow]")
+@click.option(
+    "--log-dir",
+    default="logs",
+    show_default=True,
+    help="Directory containing log files.",
+)
+@click.option(
+    "--limit", "-n",
+    default=20,
+    show_default=True,
+    help="Maximum number of runs to show.",
+)
+def history(log_dir: str, limit: int) -> None:
+    """List past orchestration runs (newest first)."""
+    entries = log_store.list_runs(log_dir, limit=limit)
+    if not entries:
+        console.print("[yellow]No runs found in logs/[/yellow]")
+        return
+
+    table = Table(title=f"Run History (last {len(entries)})", show_lines=False)
+    table.add_column("#", style="dim", width=3, justify="right")
+    table.add_column("Date", style="dim", width=19)
+    table.add_column("Status", width=10)
+    table.add_column("Score", width=6, justify="center")
+    table.add_column("Att.", width=4, justify="center")
+    table.add_column("Commit", width=8)
+    table.add_column("Task")
+
+    for i, entry in enumerate(entries, 1):
+        status_val = entry.get("status", "?")
+        color = "green" if status_val == "approved" else "red"
+        started = (entry.get("started_at") or "")[:19].replace("T", " ")
+        score = "—"
+        review = entry.get("review")
+        if review and review.get("score") is not None:
+            score = str(review["score"])
+        attempt = str(entry.get("attempt", 1))
+        commit = entry.get("commit_hash") or "—"
+        task = entry.get("task", "")
+        if len(task) > 60:
+            task = task[:57] + "..."
+
+        table.add_row(
+            str(i),
+            started,
+            f"[{color}]{status_val}[/{color}]",
+            score,
+            attempt,
+            commit,
+            task,
+        )
+
+    console.print(table)
 
 
 if __name__ == "__main__":
