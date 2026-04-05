@@ -6,6 +6,7 @@ from datetime import datetime
 
 from rich.console import Console
 
+from orchestrator import context as ctx_loader
 from orchestrator import critic, decisor, executor, planner, reviewer, session
 from orchestrator.config import Config
 from orchestrator.models import CycleRecord, CycleStatus, DecisionResult
@@ -42,8 +43,13 @@ async def run_cycle(task: str, config: Config) -> tuple[CycleRecord, str, Decisi
     # 1. Load session context once — shared by all agents this cycle
     session_ctx = session.load()
 
+    # 1b. Load project context (README, structure, stack) for the Planner
+    project_ctx = ctx_loader.load_project_context(config.project_dir)
+
     # 2. Plan
-    record.plan = await planner.generate_plan(task, config, session_context=session_ctx)
+    record.plan = await planner.generate_plan(
+        task, config, context=project_ctx, session_context=session_ctx
+    )
 
     # 3. Critic loop — refine plan before execution
     record.plan = await critic.run_critic_loop(task, record.plan, config, session_context=session_ctx)
