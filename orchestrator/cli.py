@@ -16,6 +16,7 @@ from orchestrator import __version__
 from orchestrator.config import Config
 from orchestrator.models import CycleStatus
 from orchestrator import orchestrator as orch
+from orchestrator.models import DecisionResult
 
 console = Console(highlight=False)
 
@@ -52,6 +53,17 @@ def _display_review(record) -> None:
     )
 
 
+def _display_decision(decision: DecisionResult) -> None:
+    color = "green" if decision.approved else "red"
+    status = "[OK]" if decision.approved else "[X]"
+    body = f"[{color}]{status}[/{color}] {decision.reasoning}"
+    if decision.inconsistencies:
+        body += "\n\n[bold]Inconsistencies:[/bold]"
+        for item in decision.inconsistencies:
+            body += f"\n  - {item}"
+    console.print(Panel(body, title="Decisor", border_style=color))
+
+
 def _display_issues(record) -> None:
     if not record.review or not record.review.issues:
         return
@@ -79,11 +91,12 @@ async def _run(task: str, config: Config, yes: bool) -> None:
     console.print(Panel(f"[bold]{task}[/bold]", title="Task", border_style="blue"))
 
     console.print("[dim]Planning...[/dim]")
-    record = await orch.run_cycle(task, config)
+    record, diff, decision = await orch.run_cycle(task, config)
 
     _display_plan(record)
 
-    if record.status == CycleStatus.ESCALATED:
+    if record.status == CycleStatus.ESCALATED and decision is None:
+        # Escalated before reaching Decisor (max retries exhausted by Reviewer)
         console.print(
             f"\n[red][!] Max retries ({config.max_retries}) reached without approval.[/red]"
         )
@@ -91,21 +104,23 @@ async def _run(task: str, config: Config, yes: bool) -> None:
         console.print("[yellow]Manual intervention required.[/yellow]")
         raise SystemExit(1)
 
-    # APPROVED
+    # Reviewer approved — show review
     _display_review(record)
 
+    # Show Decisor result
+    if decision is not None:
+        _display_decision(decision)
+
+    if record.status == CycleStatus.ESCALATED:
+        # Decisor rejected
+        console.print("\n[red][!] Decisor rejected — implementation diverges from plan.[/red]")
+        console.print("[yellow]Manual intervention required.[/yellow]")
+        raise SystemExit(1)
+
     # Show diff
-    diff = record.review  # diff is captured inside run_cycle; re-generate for display
-    # Re-run diff from project dir for display purposes
-    diff_result = subprocess.run(
-        ["git", "diff", "HEAD"],
-        cwd=config.project_dir,
-        capture_output=True,
-        text=True,
-    )
-    if diff_result.stdout.strip():
+    if diff.strip():
         console.print(Rule("Diff", style="blue"))
-        console.print(Syntax(diff_result.stdout, "diff", theme="monokai"))
+        console.print(Syntax(diff, "diff", theme="monokai"))
 
     # Commit confirmation
     if yes or click.confirm("\nConfirm commit?", default=True):

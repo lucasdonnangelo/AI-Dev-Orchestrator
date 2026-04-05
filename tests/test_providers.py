@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from orchestrator.config import Config
@@ -56,12 +58,16 @@ class TestGeminiProvider:
         assert issubclass(GeminiProvider, BaseAgent)
 
     def test_instantiates_with_key(self):
-        p = GeminiProvider(api_key="AI123", model="gemini-2.5-flash")
+        mock_genai = MagicMock()
+        with patch("orchestrator.providers.google._genai", mock_genai):
+            p = GeminiProvider(api_key="AI123", model="gemini-2.5-flash")
         assert isinstance(p, BaseAgentDirect)
 
     def test_call_is_coroutine(self):
         import inspect
-        p = GeminiProvider(api_key="AI123")
+        mock_genai = MagicMock()
+        with patch("orchestrator.providers.google._genai", mock_genai):
+            p = GeminiProvider(api_key="AI123")
         assert inspect.iscoroutinefunction(p.call)
 
 
@@ -74,12 +80,16 @@ class TestOpenAIProvider:
         assert issubclass(OpenAIProvider, BaseAgent)
 
     def test_instantiates_with_key(self):
-        p = OpenAIProvider(api_key="sk-oai", model="gpt-4o-mini")
+        mock_openai = MagicMock()
+        with patch("orchestrator.providers.openai._AsyncOpenAI", mock_openai):
+            p = OpenAIProvider(api_key="sk-oai", model="gpt-4o-mini")
         assert isinstance(p, BaseAgentDirect)
 
     def test_call_is_coroutine(self):
         import inspect
-        p = OpenAIProvider(api_key="sk-oai")
+        mock_openai = MagicMock()
+        with patch("orchestrator.providers.openai._AsyncOpenAI", mock_openai):
+            p = OpenAIProvider(api_key="sk-oai")
         assert inspect.iscoroutinefunction(p.call)
 
 
@@ -104,11 +114,15 @@ class TestMakeProvider:
         assert isinstance(p, ClaudeProvider)
 
     def test_google_returns_gemini_provider(self):
-        p = make_provider("google", self._cfg())
+        mock_genai = MagicMock()
+        with patch("orchestrator.providers.google._genai", mock_genai):
+            p = make_provider("google", self._cfg())
         assert isinstance(p, GeminiProvider)
 
     def test_openai_returns_openai_provider(self):
-        p = make_provider("openai", self._cfg())
+        mock_openai = MagicMock()
+        with patch("orchestrator.providers.openai._AsyncOpenAI", mock_openai):
+            p = make_provider("openai", self._cfg())
         assert isinstance(p, OpenAIProvider)
 
     def test_unknown_provider_raises_value_error(self):
@@ -120,10 +134,18 @@ class TestMakeProvider:
         assert isinstance(p, ClaudeProvider)
 
     def test_whitespace_stripped(self):
-        p = make_provider(" google ", self._cfg())
+        mock_genai = MagicMock()
+        with patch("orchestrator.providers.google._genai", mock_genai):
+            p = make_provider(" google ", self._cfg())
         assert isinstance(p, GeminiProvider)
 
     def test_all_return_base_agent(self):
         cfg = self._cfg()
-        for name in ("anthropic", "google", "openai"):
-            assert isinstance(make_provider(name, cfg), BaseAgent)
+        mock_genai = MagicMock()
+        mock_openai = MagicMock()
+        with (
+            patch("orchestrator.providers.google._genai", mock_genai),
+            patch("orchestrator.providers.openai._AsyncOpenAI", mock_openai),
+        ):
+            for name in ("anthropic", "google", "openai"):
+                assert isinstance(make_provider(name, cfg), BaseAgent)

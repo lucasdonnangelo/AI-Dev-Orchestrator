@@ -154,7 +154,7 @@ DECISOR_PROVIDER=google           # default
 
 ## Referencias
 
-- Plano completo: `docs/AI_Dev_Orchestrator_Plano_v2.md`
+- Plano completo: `docs/AI_Dev_Orchestrator_Plano.md`
 - Anthropic Python SDK: https://github.com/anthropics/anthropic-sdk-python
 - Claude Agent SDK: https://pypi.org/project/claude-agent-sdk/
 - Google GenAI SDK: https://github.com/googleapis/python-genai
