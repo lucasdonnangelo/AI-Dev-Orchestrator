@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
+from pathlib import Path
 
 import anthropic
 import click
@@ -147,6 +149,35 @@ async def _run(task: str, config: Config, yes: bool) -> None:
         console.print("[yellow]Commit skipped.[/yellow]")
 
     log_store.save(record, diff, config.log_dir)
+
+
+def _parse_tasks_file(path: str) -> list[str]:
+    """Parse a tasks file into a list of task strings.
+
+    Supports:
+    - Plain text: one task per line; lines starting with ``#`` are comments.
+    - JSON: must be an array of strings (or objects with a ``"task"`` key).
+    """
+    content = Path(path).read_text(encoding="utf-8")
+    if path.endswith(".json"):
+        data = json.loads(content)
+        if not isinstance(data, list):
+            raise click.ClickException("JSON tasks file must contain an array.")
+        tasks: list[str] = []
+        for item in data:
+            if isinstance(item, str):
+                tasks.append(item)
+            elif isinstance(item, dict):
+                tasks.append(str(item.get("task", item)))
+            else:
+                tasks.append(str(item))
+        return tasks
+    # Plain text
+    return [
+        line.strip()
+        for line in content.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
 
 
 @click.group()
@@ -318,6 +349,106 @@ def history(log_dir: str, limit: int) -> None:
         )
 
     console.print(table)
+
+
+@cli.command()
+@click.argument("tasks_file", type=click.Path(exists=True))
+@click.option(
+    "--project-dir", "-d",
+    default=".",
+    help="Path to the target project directory.",
+)
+@click.option("--yes", "-y", is_flag=True, help="Skip all confirmation prompts.")
+@click.option(
+    "--stop-on-failure",
+    is_flag=True,
+    default=False,
+    help="Abort batch on first escalated task without asking.",
+)
+def batch(tasks_file: str, project_dir: str, yes: bool, stop_on_failure: bool) -> None:
+    """Run multiple tasks sequentially from TASKS_FILE.
+
+    TASKS_FILE can be a plain-text file (one task per line) or a JSON array.
+    Lines starting with # are treated as comments in text files.
+
+    Each task only starts after the previous one is approved.
+    SESSAO_ATUAL.md accumulates context between tasks automatically.
+    """
+    config = Config.load(project_dir)
+    errors = config.validate()
+    if errors:
+        for err in errors:
+            console.print(f"[red]ERROR[/red] {err}")
+        raise SystemExit(1)
+
+    tasks = _parse_tasks_file(tasks_file)
+    if not tasks:
+        console.print("[yellow]No tasks found in file.[/yellow]")
+        return
+
+    console.print(
+        Panel(
+            f"[bold]{tasks_file}[/bold]\n[dim]{len(tasks)} task(s) queued[/dim]",
+            title="Batch",
+            border_style="blue",
+        )
+    )
+
+    results: list[dict] = []
+
+    for i, task in enumerate(tasks, 1):
+        console.print(Rule(f"Task {i}/{len(tasks)}", style="blue"))
+        task_status = "approved"
+        try:
+            asyncio.run(_run(task, config, yes))
+        except SystemExit as exc:
+            if exc.code == 130:  # KeyboardInterrupt escalated as SystemExit
+                console.print("\n[yellow]Batch interrupted.[/yellow]")
+                results.append({"task": task, "status": "interrupted"})
+                break
+            # Task failed (escalated or max retries)
+            task_status = "escalated"
+            if stop_on_failure:
+                results.append({"task": task, "status": task_status})
+                console.print("[red][!] Stopping batch on first failure.[/red]")
+                break
+            if not yes and not click.confirm(
+                f"\nTask {i} was escalated. Continue with remaining tasks?",
+                default=True,
+            ):
+                results.append({"task": task, "status": task_status})
+                break
+
+        results.append({"task": task, "status": task_status})
+
+    # --- Summary table ---
+    if not results:
+        return
+
+    console.print(Rule("Batch Summary", style="bold blue"))
+
+    table = Table(show_lines=False)
+    table.add_column("#", style="dim", width=3, justify="right")
+    table.add_column("Status", width=12)
+    table.add_column("Task")
+    for idx, r in enumerate(results, 1):
+        st = r["status"]
+        if st == "approved":
+            color, icon = "green", "[OK]"
+        elif st == "interrupted":
+            color, icon = "yellow", "[--]"
+        else:
+            color, icon = "red", "[X]"
+        task_display = r["task"] if len(r["task"]) <= 70 else r["task"][:67] + "..."
+        table.add_row(str(idx), f"[{color}]{icon}[/{color}]", task_display)
+    console.print(table)
+
+    approved_count = sum(1 for r in results if r["status"] == "approved")
+    total = len(results)
+    result_color = "green" if approved_count == total else "yellow"
+    console.print(
+        f"\n[{result_color}][bold]Result: {approved_count}/{total} tasks approved.[/bold][/{result_color}]"
+    )
 
 
 if __name__ == "__main__":
