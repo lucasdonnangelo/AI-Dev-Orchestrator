@@ -50,6 +50,19 @@ git_conventional_commits: true
 #     You are a strict FastAPI code reviewer.
 #     Focus on: Pydantic validation, async correctness, OpenAPI spec quality.
 #     Return JSON ReviewResult.
+
+# --- Plugin providers (Phase 4.3) ---
+# Register third-party provider classes by short name.
+# Each value is a "module.ClassName" import path; the class must subclass
+# BaseAgent and accept a single Config argument in its constructor.
+#
+# providers:
+#   mistral: "my_project.providers.MistralProvider"
+#   local: "llama_provider.LlamaProvider"
+#
+# Then use the short name anywhere a provider is configured:
+#   planner_provider: mistral
+#   critic_provider: local
 """,
         "tasks.txt": """\
 # FastAPI Project — starter tasks

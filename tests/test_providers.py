@@ -1,7 +1,9 @@
-"""Unit tests for orchestrator/providers/ — factory and provider instantiation."""
+"""Unit tests for orchestrator/providers/ — factory, plugin registry, and instantiation."""
 
 from __future__ import annotations
 
+import sys
+import types
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -13,7 +15,9 @@ from orchestrator.providers import (
     GeminiProvider,
     OpenAIProvider,
     make_provider,
+    register_provider,
 )
+from orchestrator.providers import _plugin_registry
 from orchestrator.providers.base import BaseAgent as BaseAgentDirect
 
 
@@ -149,3 +153,192 @@ class TestMakeProvider:
         ):
             for name in ("anthropic", "google", "openai"):
                 assert isinstance(make_provider(name, cfg), BaseAgent)
+
+
+# ---------------------------------------------------------------------------
+# Plugin registry — register_provider + make_provider integration
+# ---------------------------------------------------------------------------
+
+
+class _FakeProvider(BaseAgent):
+    """Minimal BaseAgent subclass used in plugin tests."""
+
+    def __init__(self, config: Config) -> None:
+        self.config = config
+
+    async def call(self, prompt: str, system: str = "") -> str:
+        return f"fake:{prompt}"
+
+
+class TestRegisterProvider:
+    """Tests for the global plugin registry (register_provider API)."""
+
+    def setup_method(self):
+        # Snapshot registry before each test so we can restore it after.
+        self._original = dict(_plugin_registry)
+
+    def teardown_method(self):
+        _plugin_registry.clear()
+        _plugin_registry.update(self._original)
+
+    def _cfg(self) -> Config:
+        return Config(api_key="sk-ant")
+
+    def test_registered_provider_returned_by_make_provider(self):
+        register_provider("fake", _FakeProvider)
+        p = make_provider("fake", self._cfg())
+        assert isinstance(p, _FakeProvider)
+
+    def test_registered_provider_receives_config(self):
+        register_provider("fake", _FakeProvider)
+        cfg = self._cfg()
+        p = make_provider("fake", cfg)
+        assert p.config is cfg  # type: ignore[attr-defined]
+
+    def test_registry_is_case_insensitive(self):
+        register_provider("MyProv", _FakeProvider)
+        p = make_provider("myprov", self._cfg())
+        assert isinstance(p, _FakeProvider)
+
+    def test_registry_strips_whitespace(self):
+        register_provider("  spaced  ", _FakeProvider)
+        p = make_provider("spaced", self._cfg())
+        assert isinstance(p, _FakeProvider)
+
+    def test_re_registration_overwrites_previous(self):
+        register_provider("fake", _FakeProvider)
+
+        class _OtherProvider(_FakeProvider):
+            pass
+
+        register_provider("fake", _OtherProvider)
+        p = make_provider("fake", self._cfg())
+        assert isinstance(p, _OtherProvider)
+
+    def test_unregistered_name_raises_value_error(self):
+        with pytest.raises(ValueError, match="Unknown provider"):
+            make_provider("not-registered", self._cfg())
+
+    def test_register_provider_is_hot_swap(self):
+        """Registering after make_provider has already been called changes future calls."""
+        cfg = self._cfg()
+        with pytest.raises(ValueError):
+            make_provider("hot", cfg)
+        register_provider("hot", _FakeProvider)
+        p = make_provider("hot", cfg)
+        assert isinstance(p, _FakeProvider)
+
+
+# ---------------------------------------------------------------------------
+# Plugin providers via config.plugin_providers
+# ---------------------------------------------------------------------------
+
+
+class TestConfigPluginProviders:
+    """Tests for config-level providers (.orchestrator.yaml `providers:` block)."""
+
+    def _cfg(self, plugin_providers: dict | None = None) -> Config:
+        return Config(api_key="sk-ant", plugin_providers=plugin_providers or {})
+
+    def test_dotted_path_in_plugin_providers_loaded(self):
+        # Inject a synthetic module into sys.modules so importlib can find it.
+        mod = types.ModuleType("_test_providers_mod")
+        mod.FakeProvider = _FakeProvider  # type: ignore[attr-defined]
+        sys.modules["_test_providers_mod"] = mod
+        try:
+            cfg = self._cfg({"myprov": "_test_providers_mod.FakeProvider"})
+            p = make_provider("myprov", cfg)
+            assert isinstance(p, _FakeProvider)
+        finally:
+            del sys.modules["_test_providers_mod"]
+
+    def test_plugin_providers_loaded_from_yaml(self, tmp_path):
+        """Config.load() parses 'providers:' block into plugin_providers dict."""
+        (tmp_path / ".orchestrator.yaml").write_text(
+            "providers:\n  myprov: 'some.module.MyClass'\n",
+            encoding="utf-8",
+        )
+        from unittest.mock import patch as _patch
+        import os
+        with _patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk"}, clear=False):
+            cfg = Config.load(str(tmp_path))
+        assert cfg.plugin_providers == {"myprov": "some.module.MyClass"}
+
+    def test_plugin_providers_empty_by_default(self):
+        cfg = self._cfg()
+        assert cfg.plugin_providers == {}
+
+
+# ---------------------------------------------------------------------------
+# Dotted-path provider name (make_provider fallback)
+# ---------------------------------------------------------------------------
+
+
+class TestDottedPathProvider:
+    """Tests for passing 'module.ClassName' directly as the provider name."""
+
+    def _cfg(self) -> Config:
+        return Config(api_key="sk-ant")
+
+    def _inject_module(self, mod_name: str, cls):
+        mod = types.ModuleType(mod_name)
+        setattr(mod, cls.__name__, cls)
+        sys.modules[mod_name] = mod
+        return mod
+
+    def test_dotted_path_loads_provider(self):
+        self._inject_module("_dp_test_mod", _FakeProvider)
+        try:
+            p = make_provider("_dp_test_mod._FakeProvider", self._cfg())
+            assert isinstance(p, _FakeProvider)
+        finally:
+            del sys.modules["_dp_test_mod"]
+
+    def test_dotted_path_provider_receives_config(self):
+        self._inject_module("_dp_cfg_mod", _FakeProvider)
+        try:
+            cfg = self._cfg()
+            p = make_provider("_dp_cfg_mod._FakeProvider", cfg)
+            assert p.config is cfg  # type: ignore[attr-defined]
+        finally:
+            del sys.modules["_dp_cfg_mod"]
+
+    def test_missing_module_raises_import_error(self):
+        from orchestrator.providers import _load_plugin
+        with pytest.raises(ImportError, match="Cannot import provider module"):
+            _load_plugin("nonexistent_module_xyz.MyClass", self._cfg())
+
+    def test_missing_class_raises_attribute_error(self):
+        from orchestrator.providers import _load_plugin
+        mod = types.ModuleType("_dp_empty_mod")
+        sys.modules["_dp_empty_mod"] = mod
+        try:
+            with pytest.raises(AttributeError, match="no attribute"):
+                _load_plugin("_dp_empty_mod.Missing", self._cfg())
+        finally:
+            del sys.modules["_dp_empty_mod"]
+
+    def test_non_base_agent_class_raises_type_error(self):
+        from orchestrator.providers import _load_plugin
+
+        class NotAnAgent:
+            pass
+
+        mod = types.ModuleType("_dp_notbase_mod")
+        mod.NotAnAgent = NotAnAgent  # type: ignore[attr-defined]
+        sys.modules["_dp_notbase_mod"] = mod
+        try:
+            with pytest.raises(TypeError, match="subclass of BaseAgent"):
+                _load_plugin("_dp_notbase_mod.NotAnAgent", self._cfg())
+        finally:
+            del sys.modules["_dp_notbase_mod"]
+
+    def test_malformed_path_no_dot_raises_value_error(self):
+        from orchestrator.providers import _load_plugin
+        with pytest.raises(ValueError, match="Invalid provider path"):
+            _load_plugin("NoDotClassName", self._cfg())
+
+    def test_malformed_path_leading_dot_raises_value_error(self):
+        from orchestrator.providers import _load_plugin
+        with pytest.raises(ValueError, match="Invalid provider path"):
+            _load_plugin(".OnlyClass", self._cfg())

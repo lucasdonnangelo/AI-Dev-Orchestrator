@@ -59,6 +59,11 @@ class Config:
     # Values: inline prompt text OR a file path relative to project_dir
     prompt_overrides: dict[str, str] = field(default_factory=dict)
 
+    # --- Plugin providers ---
+    # Maps a short name to a fully-qualified "module.ClassName" string.
+    # Example: {"mistral": "my_pkg.providers.MistralProvider"}
+    plugin_providers: dict[str, str] = field(default_factory=dict)
+
     # ------------------------------------------------------------------
     # Factory
     # ------------------------------------------------------------------
@@ -132,6 +137,11 @@ class Config:
         if isinstance(raw_prompts, dict):
             prompt_overrides = {k: str(v) for k, v in raw_prompts.items()}
 
+        plugin_providers: dict[str, str] = {}
+        raw_plugins = data.get("providers", {})
+        if isinstance(raw_plugins, dict):
+            plugin_providers = {k: str(v) for k, v in raw_plugins.items()}
+
         return cls(
             api_key=api_key,
             model=model,
@@ -158,6 +168,7 @@ class Config:
             git_auto_branch=git_auto_branch,
             git_conventional_commits=git_conventional_commits,
             prompt_overrides=prompt_overrides,
+            plugin_providers=plugin_providers,
         )
 
     def load_prompt(self, role: str, default_path: Path, fallback: str = "") -> str:

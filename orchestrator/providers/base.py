@@ -11,6 +11,18 @@ class BaseAgent(ABC):
     Providers wrap a specific AI SDK (Anthropic, Google, OpenAI, etc.) and
     expose a single async ``call`` method so the rest of the orchestrator is
     provider-agnostic.
+
+    **Plugin convention:** custom (third-party) providers loaded via
+    :func:`~orchestrator.providers.register_provider` or a dotted-path entry
+    in ``.orchestrator.yaml`` must accept a single
+    :class:`~orchestrator.config.Config` argument in their constructor::
+
+        class MyProvider(BaseAgent):
+            def __init__(self, config: Config) -> None:
+                self._key = config.my_api_key   # any Config field you need
+
+            async def call(self, prompt: str, system: str = "") -> str:
+                ...
     """
 
     @abstractmethod
