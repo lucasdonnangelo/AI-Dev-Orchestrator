@@ -1,6 +1,6 @@
 # Sessao Atual — AI Dev Orchestrator
 
-**Ultima atualizacao:** 04/04/2026
+**Ultima atualizacao:** 05/04/2026
 **Branch:** main
 
 ---
@@ -9,16 +9,18 @@
 
 ```
 Voce (task)
-  --> Planner (Claude) gera plano v1          [recebe session_context]
+  --> context.load_project_context()              [stack, README, arvore de dirs]
+  --> Planner (Claude) gera plano v1              [recebe session_context + project_ctx]
   --> Critico (Gemini) avalia [min 2, max 5 rounds]  [recebe session_context]
         se nao consenso: Planner refina --> Critico reavalia
   --> Plano Final
   --> Executor (Claude Agent SDK) implementa
         se reprovado (max 3x): Executor corrige com feedback
-  --> Reviewer (Gemini) avalia codigo         [recebe session_context]
-  --> Decisor (Gemini) valida coerencia com plano  [recebe session_context]
+  --> Reviewer (Gemini) avalia codigo             [recebe session_context]
+  --> Decisor (Gemini) valida coerencia com plano [recebe session_context]
   --> Aprovado --> SESSAO_ATUAL.md atualizado automaticamente
-               --> Voce confirma commit
+               --> Voce confirma commit (mensagem convencional automatica)
+               --> Se git_auto_branch=True: PR description gerada
   --> ESCALADO  --> Voce intervem manualmente
 ```
 
@@ -35,47 +37,29 @@ Voce (task)
 | 2.4 — SESSAO_ATUAL.md auto | session.py, session_update_system.md, load/update em todos os agentes | COMPLETA |
 | 2.5 — Robustez | retry com backoff, fix _get_diff Windows (os.devnull), fix diff no CLI | COMPLETA |
 | 2.6 — Logging/Historico | logger.py, orchestrate history/status, commit hash | COMPLETA |
-| 3+ | Multi-task, contexto inteligente, git avancado, metricas | pendente |
+| 3.1 — Contexto Inteligente | context.py: stack detection, README, arvore de dirs; integrado no Planner | COMPLETA |
+| 3.2 — Multi-task Batch | orchestrate batch: arquivo .txt/.json, execucao sequencial, resumo final | COMPLETA |
+| 3.3 — Git Avancado | git.py: branch por task, conventional commits, PR description | COMPLETA |
+| 3.4 — Melhorias de CLI | stage messages coloridas [1/5..5/5], --quiet/-q, --verbose/-v | COMPLETA |
+| 3.5 — Metricas | orchestrate metrics: stats agregadas de todos os logs | COMPLETA |
+| 4+ | Templates, plugins, modo interativo | pendente |
 
 ---
 
 ## Ultima tarefa aprovada
 
-**Tarefa:** Fase 2.6 + correcoes do teste end-to-end
-**Commit:** 2fcebef
+**Tarefa:** Fase 3 completa (3.1 a 3.5)
+**Commits:** feat: Phase 3.1 (context loader) + fases 3.2-3.5 pendentes de commit
 
 **Arquivos criados:**
-- orchestrator/logger.py
-- tests/test_logger.py
+- orchestrator/context.py
+- orchestrator/git.py
 
 **Arquivos modificados:**
-- orchestrator/cli.py — logger integrado, commit hash capturado, `orchestrate history` e `orchestrate status` implementados
-- orchestrator/providers/retry.py — parametros `delay_extractor` e `max_retry_delay`
-- orchestrator/providers/google.py — `_extract_gemini_delay` para extrair retryDelay do 429 Gemini
-- orchestrator/prompts/executor_context.md — instrucao para examinar convencoes do projeto antes de criar arquivos
-- cobaia/divide.py + cobaia/test_divide.py — funcao divide com protecao contra divisao por zero
-
-**Resultado dos testes:** 104 passed (orchestrator) + 28 passed (cobaia)
-
----
-
-## Teste end-to-end executado
-
-Ciclo completo rodado contra o projeto cobaia com a task:
-"Criar uma funcao divide(a, b) que retorna a divisao de dois numeros, com protecao contra divisao por zero"
-
-**O que funcionou:**
-- Planner gerou plano estruturado
-- Critic rodou 2 rounds com consenso (score 9/10)
-- Executor criou os arquivos corretos
-- Reviewer identificou bug de import (validacao funcionou)
-- Retry logic ativou ao encontrar 429
-- Logger salvou registro do ciclo escalado
-
-**Bugs encontrados e corrigidos:**
-1. Executor usava `from cobaia.divide import divide` em vez de `from divide import divide` — corrigido via executor_context.md
-2. Retry delay ignorava o `retryDelay` informado pela API Gemini — corrigido com `_extract_gemini_delay`
-3. Quota diaria Gemini free tier (20 req/dia) esgotada durante o teste — sistema agora detecta e nao tenta retry nesses casos
+- orchestrator/orchestrator.py — context loader integrado, stage messages coloridas [1/5..5/5]
+- orchestrator/config.py — campos git_auto_branch e git_conventional_commits
+- orchestrator/logger.py — list_runs suporta limit=0 (todos os logs)
+- orchestrator/cli.py — batch, metrics, quiet/verbose, git hooks no commit
 
 ---
 
@@ -100,29 +84,78 @@ make_provider(name, config) -> BaseAgent
 
 ### Agentes
 
-| Agente | Arquivo | Provider configuravel | Recebe session_context |
-|--------|---------|----------------------|------------------------|
-| Planner | `planner.py` | `config.planner_provider` (default: anthropic) | sim |
-| Critico | `critic.py` | `config.critic_provider` (default: google) | sim |
-| Executor | `executor.py` | sempre Claude Agent SDK | nao |
-| Reviewer | `reviewer.py` | `config.reviewer_provider` (default: google) | sim |
-| Decisor | `decisor.py` | `config.decisor_provider` (default: google) | sim |
+| Agente | Arquivo | Provider configuravel | Recebe session_context | Recebe project_ctx |
+|--------|---------|----------------------|------------------------|--------------------|
+| Planner | `planner.py` | `config.planner_provider` (default: anthropic) | sim | sim |
+| Critico | `critic.py` | `config.critic_provider` (default: google) | sim | nao |
+| Executor | `executor.py` | sempre Claude Agent SDK | nao | nao |
+| Reviewer | `reviewer.py` | `config.reviewer_provider` (default: google) | sim | nao |
+| Decisor | `decisor.py` | `config.decisor_provider` (default: google) | sim | nao |
+
+### Context Loader (`orchestrator/context.py`)
+
+```
+load_project_context(project_dir) -> str
+  -- _detect_stack(): pyproject.toml, package.json, go.mod, Cargo.toml, etc.
+  -- _load_readme(): README.md/.rst/.txt (truncado em 6k chars)
+  -- _build_tree(): arvore de dirs (ignora .git, __pycache__, node_modules etc; max 80 itens, profundidade 4)
+  -- cap total: 24k chars
+  Chamado em orchestrator.run_cycle() antes do Planner
+```
+
+### Git Helpers (`orchestrator/git.py`)
+
+```
+detect_commit_type(task) -> str      -- keywords PT+EN: fix, docs, test, refactor, chore, perf, feat
+make_branch_name(task) -> str        -- "feat/criar-funcao-divide-a-b"
+make_commit_message(task) -> str     -- "feat: Criar funcao divide(a, b)" (max 72 chars)
+create_branch(project_dir, branch)   -- git checkout -b
+get_current_branch(project_dir)      -- branch atual
+build_pr_description(task, record)   -- markdown com plan/review/decision sem chamada de AI
+```
+
+### CLI (`orchestrator/cli.py`)
+
+```
+orchestrate run TASK [OPTIONS]
+  -d   project dir
+  -y   skip confirmations
+  -v   verbose (mostra issues/suggestions sempre)
+  -q   quiet (suprime panels, so erros e commit)
+
+orchestrate batch TASKS_FILE [OPTIONS]
+  -d   project dir
+  -y   skip all confirmations
+  -q / -v   propagados para cada task
+  --stop-on-failure   para no primeiro erro sem perguntar
+  Formatos: .txt (uma task por linha, # = comentario) ou .json (array)
+
+orchestrate metrics [--log-dir logs]
+  -- total/aprovados/escalados + %, taxa 1a tentativa
+  -- score medio, tentativas medias, duracao media
+  -- barra visual proporcional
+  -- tabela "Last 5 Runs"
+
+orchestrate history [-n 20] [--log-dir logs]
+orchestrate status [--log-dir logs]
+```
+
+### Stage messages (orchestrator.py)
+
+```
+[blue]    [1/5] Planning...[/blue]
+[cyan]    [2/5] Critic loop...[/cyan]
+[green]   [3/5] Executing (attempt N/M)...[/green]
+[yellow]  [4/5] Reviewing...[/yellow]
+[magenta] [5/5] Decisor...[/magenta]
+```
 
 ### Logger (`orchestrator/logger.py`)
 
 ```
 logger.save(record, diff, log_dir) -> Path
-  Salva CycleRecord + diff em logs/YYYYMMDD_HHMMSS_ffffff_<slug>.json
-  Chamado pelo CLI em todos os caminhos (aprovado, escalado por Reviewer, escalado por Decisor)
-
-logger.list_runs(log_dir, limit) -> list[dict]
-  Lista execucoes mais recentes (newest-first por nome de arquivo)
-
+logger.list_runs(log_dir, limit) -> list[dict]   -- limit=0 retorna todos
 logger.load_last(log_dir) -> dict | None
-  Retorna a execucao mais recente
-
-orchestrate history --log-dir logs -n 20   -- tabela com as ultimas N execucoes
-orchestrate status  --log-dir logs          -- painel detalhado da ultima execucao
 ```
 
 ### Config (campos relevantes)
@@ -141,6 +174,9 @@ GOOGLE_MODEL=gemini-2.5-flash
 CRITIC_MIN_ROUNDS=2
 CRITIC_MAX_ROUNDS=5
 ORCHESTRATOR_MAX_RETRIES=3
+
+GIT_AUTO_BRANCH=false           # true: cria branch feat/task-slug por task
+GIT_CONVENTIONAL_COMMITS=true   # true: mensagem feat:/fix:/etc automatica
 ```
 
 ### Modelos de dados (`models.py`)
@@ -160,10 +196,11 @@ CycleRecord    -- task, status, plan, review, decision, attempt,
 
 ## Proximos passos imediatos
 
-1. **Fase 3.1 — Contexto Inteligente:** carregar README, estrutura de pastas e arquivos relevantes como contexto automatico
-2. **Fase 3.2 — Multi-task (Batch):** aceitar arquivo com lista de tasks, executar sequencialmente
-3. **Fase 3.3 — Git Avancado:** branch por task, Conventional Commits, PR description
-4. **Testar ciclo end-to-end completo** apos reset da quota Gemini (free tier: 20 req/dia)
+1. **Fase 4.1 — Templates de Projeto:** `orchestrate init --template fastapi/python-cli/react`
+2. **Fase 4.2 — Prompts Customizaveis:** override de system prompts via `.orchestrator.yaml`
+3. **Fase 4.3 — Plugin de Providers:** interface para adicionar Mistral, Llama, etc.
+4. **Fase 4.4 — Modo Interativo:** editar plano/codigo antes de resubmeter, chat com agente
+5. **Testar ciclo end-to-end** apos reset da quota Gemini (free tier: 20 req/dia)
 
 ---
 
@@ -175,6 +212,12 @@ pip install -e .
 
 # Rodar uma task
 python -m orchestrator.cli run "sua task aqui" -d /caminho/do/projeto -y
+
+# Rodar batch de tasks
+python -m orchestrator.cli batch tasks.txt -d /caminho/do/projeto -y
+
+# Ver metricas agregadas
+python -m orchestrator.cli metrics
 
 # Ver ultima execucao
 python -m orchestrator.cli status

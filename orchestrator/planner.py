@@ -39,10 +39,20 @@ async def generate_plan(
         A parsed TaskPlan ready for the Executor.
     """
     user_message = f"Task: {task}"
-    if session_context:
-        user_message += f"\n\n## Session Context (current project state)\n\n{session_context}"
     if context:
-        user_message += f"\n\n## Project Context\n\n{context}"
+        user_message += (
+            f"\n\n## Target Project Context"
+            f"\n> THIS is the project you are writing code for. "
+            f"Use only paths relative to this project's root."
+            f"\n\n{context}"
+        )
+    if session_context:
+        user_message += (
+            f"\n\n## Orchestrator Dev Log"
+            f"\n> Background context about the AI tool's own development state."
+            f" Do NOT use file paths from this section — they belong to a different project."
+            f"\n\n{session_context}"
+        )
 
     provider = make_provider(config.planner_provider, config)
     raw = await provider.call(prompt=user_message, system=_load_system_prompt())

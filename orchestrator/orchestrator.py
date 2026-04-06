@@ -40,11 +40,15 @@ async def run_cycle(task: str, config: Config) -> tuple[CycleRecord, str, Decisi
     last_diff = ""
     decision: DecisionResult | None = None
 
-    # 1. Load session context once — shared by all agents this cycle
-    session_ctx = session.load()
+    # 1. Load session context once — from the TARGET project's SESSAO_ATUAL.md
+    #    Each project keeps its own session file so the Planner gets project-specific
+    #    context, not the orchestrator's own development log.
+    session_ctx = session.load(config.project_dir)
 
     # 1b. Load project context (README, structure, stack) for the Planner
     project_ctx = ctx_loader.load_project_context(config.project_dir)
+    # Prepend the absolute path so the Planner is never confused about which project it is planning for
+    project_ctx = f"**Project directory:** `{config.project_dir}`\n\n{project_ctx}"
 
     # 2. Plan
     console.print("[blue]  [1/5] Planning...[/blue]")
@@ -99,7 +103,7 @@ async def run_cycle(task: str, config: Config) -> tuple[CycleRecord, str, Decisi
         record.status = CycleStatus.APPROVED
         # 8. Update SESSAO_ATUAL.md — only on full approval
         try:
-            await session.update(task, record.plan, last_diff, record.review, decision, config)
+            await session.update(task, record.plan, last_diff, record.review, decision, config, project_dir=config.project_dir)
             console.print("[dim]  Session updated — SESSAO_ATUAL.md[/dim]")
         except Exception as exc:  # noqa: BLE001
             console.print(f"[yellow][!] Could not update SESSAO_ATUAL.md: {exc}[/yellow]")

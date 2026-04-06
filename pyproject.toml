@@ -1,32 +1,32 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires = ["setuptools>=61.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "ai-dev-orchestrator"
 version = "0.1.0"
-description = "CLI that automates the dev cycle using AI agents: Planner → Executor → Reviewer"
+description = "AI-powered development orchestrator using multiple LLM agents"
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [
     {name = "Lucas Donnangelo"},
 ]
 
 dependencies = [
     "anthropic>=0.87.0",
+    "google-genai>=1.0.0",
+    "openai>=1.50.0",
+    "rich>=13.0",
+    "typer[all]",
+    "pydantic",
     "claude-agent-sdk>=0.1.50",
     "python-dotenv>=1.0.0",
     "pyyaml>=6.0",
-    "rich>=13.0",
     "click>=8.0",
-    "google-genai>=1.0.0",
 ]
 
 [project.optional-dependencies]
-openai = [
-    "openai>=1.50.0",
-]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
@@ -34,13 +34,13 @@ dev = [
 ]
 
 [project.scripts]
-orchestrate = "orchestrator.cli:cli"
+orchestrate = "orchestrator.cli:app"
 
 [tool.setuptools.packages.find]
 include = ["orchestrator*"]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py311"
 line-length = 100
 
 [tool.ruff.lint]

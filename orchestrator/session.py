@@ -9,14 +9,32 @@ from orchestrator.config import Config
 from orchestrator.models import DecisionResult, ReviewResult, TaskPlan
 from orchestrator.providers import make_provider
 
-_SESSION_PATH = Path(__file__).resolve().parent.parent / "SESSAO_ATUAL.md"
 _PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "session_update_system.md"
+_SESSION_FILENAME = "SESSAO_ATUAL.md"
 
 
-def load() -> str:
-    """Return the contents of SESSAO_ATUAL.md, or an empty string if missing."""
-    if _SESSION_PATH.exists():
-        return _SESSION_PATH.read_text(encoding="utf-8")
+def _session_path(project_dir: str | Path | None = None) -> Path:
+    """Return the SESSAO_ATUAL.md path for the given project directory.
+
+    If *project_dir* is provided, the file is co-located with the project.
+    Falls back to the orchestrator's own root when *project_dir* is None.
+    """
+    if project_dir is not None:
+        return Path(project_dir).resolve() / _SESSION_FILENAME
+    # Legacy fallback — orchestrator's own root
+    return Path(__file__).resolve().parent.parent / _SESSION_FILENAME
+
+
+def load(project_dir: str | Path | None = None) -> str:
+    """Return the contents of the project's SESSAO_ATUAL.md, or empty string.
+
+    Each target project keeps its own session file so that the Planner
+    receives context specific to that project — not the orchestrator's own
+    development log.
+    """
+    path = _session_path(project_dir)
+    if path.exists():
+        return path.read_text(encoding="utf-8")
     return ""
 
 
@@ -33,6 +51,7 @@ async def update(
     review: ReviewResult,
     decision: DecisionResult,
     config: Config,
+    project_dir: str | Path | None = None,
 ) -> None:
     """Generate an updated SESSAO_ATUAL.md and write it to disk.
 
@@ -46,7 +65,7 @@ async def update(
         decision: The Decisor's validation result.
         config: Resolved orchestrator configuration.
     """
-    current = load()
+    current = load(project_dir)
 
     user_message = (
         f"## Current SESSAO_ATUAL.md\n\n{current}\n\n"
@@ -68,4 +87,4 @@ async def update(
             updated_content = updated_content.split("\n", 1)[1]
         updated_content = updated_content.rsplit("```", 1)[0].strip()
 
-    _SESSION_PATH.write_text(updated_content, encoding="utf-8")
+    _session_path(project_dir).write_text(updated_content, encoding="utf-8")

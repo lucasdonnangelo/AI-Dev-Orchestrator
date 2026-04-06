@@ -74,7 +74,8 @@ def _load_readme(project_dir: Path) -> str:
 
 def _build_tree(project_dir: Path) -> str:
     """Build a compact directory tree string, skipping noise directories."""
-    lines: list[str] = [f"{project_dir.name}/"]
+    # Use "." as root so the model does NOT prefix paths with the project folder name.
+    lines: list[str] = [". (project root)"]
     count = 0
 
     def _walk(path: Path, prefix: str = "", depth: int = 0) -> None:
@@ -104,7 +105,12 @@ def _build_tree(project_dir: Path) -> str:
                 _walk(entry, prefix + "|  ", depth + 1)
 
     _walk(project_dir)
-    return "## Project Structure\n\n```\n" + "\n".join(lines) + "\n```\n"
+    return (
+        "## Project Structure\n\n"
+        "> All paths are relative to the project root. "
+        "Do NOT include the project folder name as a prefix.\n\n"
+        "```\n" + "\n".join(lines) + "\n```\n"
+    )
 
 
 # ---------------------------------------------------------------------------

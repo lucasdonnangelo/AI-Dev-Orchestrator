@@ -25,3 +25,4 @@ When you receive **reviewer feedback**, focus on fixing the reported issues:
 - Do NOT install new dependencies unless the plan says to.
 - Prefer small, focused changes over large rewrites.
 - Always leave the project in a working state (no syntax errors, imports resolve).
+- **You are running inside the project directory. All paths are relative to the project root. Do NOT create subdirectories named after the project. Example: create `src/main.py`, not `my-project/src/main.py`.**

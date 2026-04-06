@@ -1,0 +1,7 @@
+# Task Tracker CLI — projeto cobaia
+Criar estrutura inicial do projeto com pyproject.toml e um __init__.py
+Criar modelo Task com campos id, title, status, created_at em models.py
+Implementar storage em arquivo JSON com funcoes save e load
+Criar comando CLI add que adiciona uma task
+Criar comando CLI list que mostra todas as tasks
+Adicionar testes unitarios para o storage
