@@ -115,18 +115,28 @@ def _commit(project_dir: str, message: str) -> str | None:
         return None
 
 
-async def _run(task: str, config: Config, yes: bool) -> None:
-    console.print(Panel(f"[bold]{task}[/bold]", title="Task", border_style="blue"))
+async def _run(task: str, config: Config, yes: bool, quiet: bool = False, verbose: bool = False) -> None:
+    """Execute one full orchestration cycle.
+
+    Args:
+        task: Natural-language task description.
+        config: Resolved orchestrator configuration.
+        yes: Skip all confirmation prompts.
+        quiet: Suppress non-essential panels (plan, diff, review, decision).
+               Errors and commit status are always shown.
+        verbose: Show extra detail (issues list even on approval, all suggestions).
+    """
+    if not quiet:
+        console.print(Panel(f"[bold]{task}[/bold]", title="Task", border_style="blue"))
 
     _maybe_create_branch(task, config)
 
-    console.print("[dim]Planning...[/dim]")
     record, diff, decision = await orch.run_cycle(task, config)
 
-    _display_plan(record)
+    if not quiet:
+        _display_plan(record)
 
     if record.status == CycleStatus.ESCALATED and decision is None:
-        # Escalated before reaching Decisor (max retries exhausted by Reviewer)
         console.print(
             f"\n[red][!] Max retries ({config.max_retries}) reached without approval.[/red]"
         )
@@ -135,30 +145,43 @@ async def _run(task: str, config: Config, yes: bool) -> None:
         log_store.save(record, diff, config.log_dir)
         raise SystemExit(1)
 
-    # Reviewer approved — show review
-    _display_review(record)
+    if not quiet:
+        _display_review(record)
+        if decision is not None:
+            _display_decision(decision)
+    elif verbose:
+        # In verbose+quiet (unusual) still show the review score
+        review = record.review
+        if review:
+            status = "[OK]" if review.approved else "[X]"
+            console.print(f"  Review: {status} {review.score}/10 — {review.summary[:80]}")
 
-    # Show Decisor result
-    if decision is not None:
-        _display_decision(decision)
+    # Always show issues in verbose mode (even on approval)
+    if verbose and record.review and record.review.issues:
+        _display_issues(record)
+    # Also show suggestions in verbose mode
+    if verbose and record.review and record.review.suggestions:
+        console.print("[dim]Suggestions:[/dim]")
+        for s in record.review.suggestions:
+            console.print(f"  [dim]- {s}[/dim]")
 
     if record.status == CycleStatus.ESCALATED:
-        # Decisor rejected
         console.print("\n[red][!] Decisor rejected — implementation diverges from plan.[/red]")
         console.print("[yellow]Manual intervention required.[/yellow]")
         log_store.save(record, diff, config.log_dir)
         raise SystemExit(1)
 
-    # Show diff
-    if diff.strip():
+    # Show diff (suppressed in quiet mode)
+    if not quiet and diff.strip():
         console.print(Rule("Diff", style="blue"))
         console.print(Syntax(diff, "diff", theme="monokai"))
 
     # Commit confirmation
-    if config.git_conventional_commits:
-        commit_msg = git_helpers.make_commit_message(task)
-    else:
-        commit_msg = f"feat: {task[:72]}"
+    commit_msg = (
+        git_helpers.make_commit_message(task)
+        if config.git_conventional_commits
+        else f"feat: {task[:72]}"
+    )
 
     if yes or click.confirm("\nConfirm commit?", default=True):
         commit_hash = _commit(config.project_dir, commit_msg)
@@ -167,7 +190,8 @@ async def _run(task: str, config: Config, yes: bool) -> None:
             console.print(f"[green][OK] Committed:[/green] {commit_msg} ({commit_hash})")
             if config.git_auto_branch:
                 pr_desc = git_helpers.build_pr_description(task, record)
-                console.print(Panel(pr_desc, title="PR Description", border_style="dim"))
+                if not quiet:
+                    console.print(Panel(pr_desc, title="PR Description", border_style="dim"))
         else:
             log_store.save(record, diff, config.log_dir)
             raise SystemExit(1)
@@ -227,8 +251,9 @@ def cli() -> None:
     help="Use a pre-existing plan JSON file instead of generating one.",
 )
 @click.option("--yes", "-y", is_flag=True, help="Skip commit confirmation prompt.")
-@click.option("--verbose", "-v", is_flag=True, help="Enable verbose output.")
-def run(task: str, project_dir: str, plan_file: str | None, yes: bool, verbose: bool) -> None:
+@click.option("--verbose", "-v", is_flag=True, help="Show extra detail (issues, suggestions).")
+@click.option("--quiet", "-q", is_flag=True, help="Suppress non-essential panels (errors/commit always shown).")
+def run(task: str, project_dir: str, plan_file: str | None, yes: bool, verbose: bool, quiet: bool) -> None:
     """Run a full orchestration cycle for TASK."""
 
     config = Config.load(project_dir)
@@ -239,7 +264,7 @@ def run(task: str, project_dir: str, plan_file: str | None, yes: bool, verbose: 
         raise SystemExit(1)
 
     try:
-        asyncio.run(_run(task, config, yes))
+        asyncio.run(_run(task, config, yes, quiet=quiet, verbose=verbose))
     except anthropic.APIError as e:
         console.print(f"[red]ERROR[/red] Anthropic API error: {e}")
         raise SystemExit(1)
@@ -391,7 +416,9 @@ def history(log_dir: str, limit: int) -> None:
     default=False,
     help="Abort batch on first escalated task without asking.",
 )
-def batch(tasks_file: str, project_dir: str, yes: bool, stop_on_failure: bool) -> None:
+@click.option("--quiet", "-q", is_flag=True, help="Suppress non-essential panels per task.")
+@click.option("--verbose", "-v", is_flag=True, help="Show extra detail per task.")
+def batch(tasks_file: str, project_dir: str, yes: bool, stop_on_failure: bool, quiet: bool, verbose: bool) -> None:
     """Run multiple tasks sequentially from TASKS_FILE.
 
     TASKS_FILE can be a plain-text file (one task per line) or a JSON array.
@@ -426,7 +453,7 @@ def batch(tasks_file: str, project_dir: str, yes: bool, stop_on_failure: bool) -
         console.print(Rule(f"Task {i}/{len(tasks)}", style="blue"))
         task_status = "approved"
         try:
-            asyncio.run(_run(task, config, yes))
+            asyncio.run(_run(task, config, yes, quiet=quiet, verbose=verbose))
         except SystemExit as exc:
             if exc.code == 130:  # KeyboardInterrupt escalated as SystemExit
                 console.print("\n[yellow]Batch interrupted.[/yellow]")

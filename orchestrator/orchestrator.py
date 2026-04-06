@@ -47,20 +47,24 @@ async def run_cycle(task: str, config: Config) -> tuple[CycleRecord, str, Decisi
     project_ctx = ctx_loader.load_project_context(config.project_dir)
 
     # 2. Plan
+    console.print("[blue]  [1/5] Planning...[/blue]")
     record.plan = await planner.generate_plan(
         task, config, context=project_ctx, session_context=session_ctx
     )
 
     # 3. Critic loop — refine plan before execution
+    console.print("[cyan]  [2/5] Critic loop...[/cyan]")
     record.plan = await critic.run_critic_loop(task, record.plan, config, session_context=session_ctx)
 
     # 4-6. Execute -> Review loop
     feedback = ""
     while record.attempt <= config.max_retries:
         record.status = CycleStatus.EXECUTING
+        console.print(f"[green]  [3/5] Executing (attempt {record.attempt}/{config.max_retries})...[/green]")
         last_diff = await executor.execute_plan(record.plan, config, feedback=feedback)
 
         record.status = CycleStatus.REVIEWING
+        console.print("[yellow]  [4/5] Reviewing...[/yellow]")
         record.review = await reviewer.review_code(
             record.plan, last_diff, config, session_context=session_ctx
         )
@@ -85,6 +89,7 @@ async def run_cycle(task: str, config: Config) -> tuple[CycleRecord, str, Decisi
         record.attempt += 1
 
     # 7. Decisor — validate coherence with plan
+    console.print("[magenta]  [5/5] Decisor...[/magenta]")
     decision = await decisor.decide(
         record.plan, last_diff, record.review, config, session_context=session_ctx
     )
