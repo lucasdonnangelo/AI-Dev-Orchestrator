@@ -34,7 +34,7 @@ dev = [
 ]
 
 [project.scripts]
-orchestrate = "orchestrator.cli:app"
+orchestrate = "orchestrator.cli:cli"
 
 [tool.setuptools.packages.find]
 include = ["orchestrator*"]
