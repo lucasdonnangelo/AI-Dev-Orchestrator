@@ -17,10 +17,12 @@ from rich.table import Table
 
 from orchestrator import __version__
 from orchestrator.config import Config
-from orchestrator.models import CycleStatus
+from orchestrator.models import CycleStatus, TaskPlan
+from orchestrator import chat as chat_module
 from orchestrator import git as git_helpers
 from orchestrator import logger as log_store
 from orchestrator import orchestrator as orch
+from orchestrator import session
 from orchestrator import templates as tmpl
 from orchestrator.models import DecisionResult
 
@@ -116,7 +118,14 @@ def _commit(project_dir: str, message: str) -> str | None:
         return None
 
 
-async def _run(task: str, config: Config, yes: bool, quiet: bool = False, verbose: bool = False) -> None:
+async def _run(
+    task: str,
+    config: Config,
+    yes: bool,
+    quiet: bool = False,
+    verbose: bool = False,
+    plan: TaskPlan | None = None,
+) -> None:
     """Execute one full orchestration cycle.
 
     Args:
@@ -126,13 +135,14 @@ async def _run(task: str, config: Config, yes: bool, quiet: bool = False, verbos
         quiet: Suppress non-essential panels (plan, diff, review, decision).
                Errors and commit status are always shown.
         verbose: Show extra detail (issues list even on approval, all suggestions).
+        plan: Optional pre-built plan to skip the planning/critic phases.
     """
     if not quiet:
         console.print(Panel(f"[bold]{task}[/bold]", title="Task", border_style="blue"))
 
     _maybe_create_branch(task, config)
 
-    record, diff, decision = await orch.run_cycle(task, config)
+    record, diff, decision = await orch.run_cycle(task, config, plan=plan)
 
     if not quiet:
         _display_plan(record)
@@ -142,9 +152,27 @@ async def _run(task: str, config: Config, yes: bool, quiet: bool = False, verbos
             f"\n[red][!] Max retries ({config.max_retries}) reached without approval.[/red]"
         )
         _display_issues(record)
-        console.print("[yellow]Manual intervention required.[/yellow]")
         log_store.save(record, diff, config.log_dir)
-        raise SystemExit(1)
+
+        if yes:
+            console.print("[yellow]Manual intervention required.[/yellow]")
+            raise SystemExit(1)
+
+        action = click.prompt(
+            "\nWhat next?",
+            type=click.Choice(["abort", "retry", "edit"]),
+            default="abort",
+            show_choices=True,
+        )
+        if action == "abort":
+            raise SystemExit(1)
+        elif action == "retry":
+            await _run(task, config, yes, quiet=quiet, verbose=verbose)
+            return
+        else:  # edit
+            new_task = click.prompt("New task description", default=task)
+            await _run(new_task, config, yes, quiet=quiet, verbose=verbose)
+            return
 
     if not quiet:
         _display_review(record)
@@ -168,9 +196,27 @@ async def _run(task: str, config: Config, yes: bool, quiet: bool = False, verbos
 
     if record.status == CycleStatus.ESCALATED:
         console.print("\n[red][!] Decisor rejected — implementation diverges from plan.[/red]")
-        console.print("[yellow]Manual intervention required.[/yellow]")
         log_store.save(record, diff, config.log_dir)
-        raise SystemExit(1)
+
+        if yes:
+            console.print("[yellow]Manual intervention required.[/yellow]")
+            raise SystemExit(1)
+
+        action = click.prompt(
+            "\nWhat next?",
+            type=click.Choice(["abort", "retry", "edit"]),
+            default="abort",
+            show_choices=True,
+        )
+        if action == "abort":
+            raise SystemExit(1)
+        elif action == "retry":
+            await _run(task, config, yes, quiet=quiet, verbose=verbose)
+            return
+        else:  # edit
+            new_task = click.prompt("New task description", default=task)
+            await _run(new_task, config, yes, quiet=quiet, verbose=verbose)
+            return
 
     # Show diff (suppressed in quiet mode)
     if not quiet and diff.strip():
@@ -264,8 +310,18 @@ def run(task: str, project_dir: str, plan_file: str | None, yes: bool, verbose: 
             console.print(f"[red]ERROR[/red] {err}")
         raise SystemExit(1)
 
+    prebuilt_plan: TaskPlan | None = None
+    if plan_file:
+        try:
+            prebuilt_plan = TaskPlan.from_json(
+                __import__("pathlib").Path(plan_file).read_text(encoding="utf-8")
+            )
+        except Exception as exc:
+            console.print(f"[red]ERROR[/red] Could not load plan file: {exc}")
+            raise SystemExit(1)
+
     try:
-        asyncio.run(_run(task, config, yes, quiet=quiet, verbose=verbose))
+        asyncio.run(_run(task, config, yes, quiet=quiet, verbose=verbose, plan=prebuilt_plan))
     except anthropic.APIError as e:
         console.print(f"[red]ERROR[/red] Anthropic API error: {e}")
         raise SystemExit(1)
@@ -616,6 +672,94 @@ def metrics(log_dir: str) -> None:
                 task_text = task_text[:52] + "..."
             recent_table.add_row(started, f"[{color}]{st}[/{color}]", score, task_text)
         console.print(recent_table)
+
+
+@cli.command("chat")
+@click.option(
+    "--agent", "-a", "role",
+    default="planner",
+    type=click.Choice(chat_module.ROLES),
+    show_default=True,
+    help="Agent to chat with.",
+)
+@click.option(
+    "--project-dir", "-d",
+    default=".",
+    help="Target project directory (used to load .orchestrator.yaml and session context).",
+)
+def chat(role: str, project_dir: str) -> None:
+    """Start an interactive chat session with an orchestrator agent.
+
+    Sends messages directly to the chosen agent using its configured provider
+    and system prompt.  Session context from SESSAO_ATUAL.md (if present) is
+    prepended to the first message automatically.
+
+    \b
+    Examples:
+      orchestrate chat                       # chat with planner (default)
+      orchestrate chat --agent reviewer      # chat with reviewer
+      orchestrate chat -a critic -d ./myapp  # critic for a specific project
+    """
+    config = Config.load(project_dir)
+    errors = config.validate()
+    if errors:
+        for err in errors:
+            console.print(f"[red]ERROR[/red] {err}")
+        raise SystemExit(1)
+
+    session_ctx = session.load(config.project_dir)
+
+    provider_name = {
+        "planner":  config.planner_provider,
+        "critic":   config.critic_provider,
+        "reviewer": config.reviewer_provider,
+        "decisor":  config.decisor_provider,
+    }[role]
+
+    console.print(
+        Panel(
+            f"[bold]{role}[/bold] agent  [dim]({provider_name})[/dim]\n"
+            "[dim]Type your message and press Enter. 'exit' or Ctrl+C to quit.[/dim]",
+            title="Chat",
+            border_style="blue",
+        )
+    )
+    if session_ctx:
+        console.print("[dim]  Session context loaded from SESSAO_ATUAL.md[/dim]")
+
+    first_turn = True
+    while True:
+        try:
+            message = click.prompt("You", prompt_suffix="\n> ")
+        except (click.Abort, EOFError):
+            console.print("\n[dim]Exiting chat.[/dim]")
+            break
+
+        message = message.strip()
+        if message.lower() in ("exit", "quit", "q"):
+            console.print("[dim]Exiting chat.[/dim]")
+            break
+        if not message:
+            continue
+
+        # Prepend session context to the first turn only
+        full_message = message
+        if first_turn and session_ctx:
+            full_message = (
+                f"## Project Context (SESSAO_ATUAL.md)\n\n{session_ctx}\n\n{message}"
+            )
+        first_turn = False
+
+        try:
+            response = asyncio.run(chat_module.send(role, full_message, config))
+        except Exception as exc:
+            console.print(f"[red]ERROR[/red] {exc}")
+            continue
+
+        console.print(Rule(style="dim"))
+        console.print(f"[bold green]{role.capitalize()}[/bold green]")
+        console.print(response)
+        console.print(Rule(style="dim"))
 
 
 @cli.command("init")

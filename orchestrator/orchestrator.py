@@ -9,18 +9,22 @@ from rich.console import Console
 from orchestrator import context as ctx_loader
 from orchestrator import critic, decisor, executor, planner, reviewer, session
 from orchestrator.config import Config
-from orchestrator.models import CycleRecord, CycleStatus, DecisionResult
+from orchestrator.models import CycleRecord, CycleStatus, DecisionResult, TaskPlan
 
 console = Console(highlight=False)
 
 
-async def run_cycle(task: str, config: Config) -> tuple[CycleRecord, str, DecisionResult | None]:
+async def run_cycle(
+    task: str,
+    config: Config,
+    plan: TaskPlan | None = None,
+) -> tuple[CycleRecord, str, DecisionResult | None]:
     """Execute a full orchestration cycle for the given task.
 
     Flow:
         1. Load SESSAO_ATUAL.md for shared context
-        2. Planner generates a TaskPlan (with session context)
-        3. Critic loop refines the plan (with session context)
+        2. Planner generates a TaskPlan (with session context)  [skipped if *plan* given]
+        3. Critic loop refines the plan (with session context)  [skipped if *plan* given]
         4. Executor implements the refined plan
         5. Reviewer evaluates the result (with session context)
         6. If rejected and attempts < max_retries -> re-execute with feedback
@@ -31,6 +35,10 @@ async def run_cycle(task: str, config: Config) -> tuple[CycleRecord, str, Decisi
     Args:
         task: Natural-language description of the task.
         config: Resolved orchestrator configuration.
+        plan: Optional pre-built :class:`TaskPlan`.  When provided, steps 2 and
+              3 (planning and critic loop) are skipped and this plan is used
+              directly for execution.  Useful for retrying after editing or for
+              passing a plan from a JSON file via ``--plan``.
 
     Returns:
         A tuple of (CycleRecord, diff string, DecisionResult | None).
@@ -45,20 +53,26 @@ async def run_cycle(task: str, config: Config) -> tuple[CycleRecord, str, Decisi
     #    context, not the orchestrator's own development log.
     session_ctx = session.load(config.project_dir)
 
-    # 1b. Load project context (README, structure, stack) for the Planner
-    project_ctx = ctx_loader.load_project_context(config.project_dir)
-    # Prepend the absolute path so the Planner is never confused about which project it is planning for
-    project_ctx = f"**Project directory:** `{config.project_dir}`\n\n{project_ctx}"
+    if plan is not None:
+        # Skip planning and critic — use the provided plan directly.
+        record.plan = plan
+        console.print("[dim]  [1/5] Planning... (skipped — plan provided)[/dim]")
+        console.print("[dim]  [2/5] Critic loop... (skipped — plan provided)[/dim]")
+    else:
+        # 1b. Load project context (README, structure, stack) for the Planner
+        project_ctx = ctx_loader.load_project_context(config.project_dir)
+        # Prepend the absolute path so the Planner is never confused about which project it is planning for
+        project_ctx = f"**Project directory:** `{config.project_dir}`\n\n{project_ctx}"
 
-    # 2. Plan
-    console.print("[blue]  [1/5] Planning...[/blue]")
-    record.plan = await planner.generate_plan(
-        task, config, context=project_ctx, session_context=session_ctx
-    )
+        # 2. Plan
+        console.print("[blue]  [1/5] Planning...[/blue]")
+        record.plan = await planner.generate_plan(
+            task, config, context=project_ctx, session_context=session_ctx
+        )
 
-    # 3. Critic loop — refine plan before execution
-    console.print("[cyan]  [2/5] Critic loop...[/cyan]")
-    record.plan = await critic.run_critic_loop(task, record.plan, config, session_context=session_ctx)
+        # 3. Critic loop — refine plan before execution
+        console.print("[cyan]  [2/5] Critic loop...[/cyan]")
+        record.plan = await critic.run_critic_loop(task, record.plan, config, session_context=session_ctx)
 
     # 4-6. Execute -> Review loop
     feedback = ""
