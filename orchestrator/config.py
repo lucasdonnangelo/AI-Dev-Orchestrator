@@ -49,6 +49,10 @@ class Config:
     log_level: str = "INFO"
     project_dir: str = "."
 
+    # --- Git ---
+    git_auto_branch: bool = False
+    git_conventional_commits: bool = True
+
     # ------------------------------------------------------------------
     # Factory
     # ------------------------------------------------------------------
@@ -110,6 +114,13 @@ class Config:
             "DECISOR_PROVIDER", data.get("decisor_provider", "google")
         )
 
+        git_auto_branch = str(
+            os.getenv("GIT_AUTO_BRANCH", data.get("git_auto_branch", False))
+        ).lower() in {"1", "true", "yes"}
+        git_conventional_commits = str(
+            os.getenv("GIT_CONVENTIONAL_COMMITS", data.get("git_conventional_commits", True))
+        ).lower() not in {"0", "false", "no"}
+
         return cls(
             api_key=api_key,
             model=model,
@@ -133,6 +144,8 @@ class Config:
             log_dir=data.get("log_dir", "logs"),
             log_level=log_level,
             project_dir=str(project_path),
+            git_auto_branch=git_auto_branch,
+            git_conventional_commits=git_conventional_commits,
         )
 
     def validate(self) -> list[str]:

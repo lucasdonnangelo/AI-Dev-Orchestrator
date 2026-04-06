@@ -18,6 +18,7 @@ from rich.table import Table
 from orchestrator import __version__
 from orchestrator.config import Config
 from orchestrator.models import CycleStatus
+from orchestrator import git as git_helpers
 from orchestrator import logger as log_store
 from orchestrator import orchestrator as orch
 from orchestrator.models import DecisionResult
@@ -81,6 +82,22 @@ def _display_issues(record) -> None:
             console.print(f"         Suggestion: {issue.suggestion}")
 
 
+def _maybe_create_branch(task: str, config) -> str | None:
+    """Create and checkout a new branch if git_auto_branch is enabled.
+
+    Returns the branch name on success, None otherwise.
+    """
+    if not config.git_auto_branch:
+        return None
+    branch = git_helpers.make_branch_name(task)
+    ok = git_helpers.create_branch(config.project_dir, branch)
+    if ok:
+        console.print(f"[dim]  Branch: {branch}[/dim]")
+        return branch
+    console.print(f"[yellow][!] Could not create branch '{branch}' — committing on current branch.[/yellow]")
+    return None
+
+
 def _commit(project_dir: str, message: str) -> str | None:
     """Run git add + commit. Returns the new commit hash on success, None on failure."""
     try:
@@ -100,6 +117,8 @@ def _commit(project_dir: str, message: str) -> str | None:
 
 async def _run(task: str, config: Config, yes: bool) -> None:
     console.print(Panel(f"[bold]{task}[/bold]", title="Task", border_style="blue"))
+
+    _maybe_create_branch(task, config)
 
     console.print("[dim]Planning...[/dim]")
     record, diff, decision = await orch.run_cycle(task, config)
@@ -136,12 +155,19 @@ async def _run(task: str, config: Config, yes: bool) -> None:
         console.print(Syntax(diff, "diff", theme="monokai"))
 
     # Commit confirmation
-    if yes or click.confirm("\nConfirm commit?", default=True):
+    if config.git_conventional_commits:
+        commit_msg = git_helpers.make_commit_message(task)
+    else:
         commit_msg = f"feat: {task[:72]}"
+
+    if yes or click.confirm("\nConfirm commit?", default=True):
         commit_hash = _commit(config.project_dir, commit_msg)
         if commit_hash:
             record.commit_hash = commit_hash
             console.print(f"[green][OK] Committed:[/green] {commit_msg} ({commit_hash})")
+            if config.git_auto_branch:
+                pr_desc = git_helpers.build_pr_description(task, record)
+                console.print(Panel(pr_desc, title="PR Description", border_style="dim"))
         else:
             log_store.save(record, diff, config.log_dir)
             raise SystemExit(1)
