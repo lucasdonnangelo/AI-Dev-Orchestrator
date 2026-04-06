@@ -65,7 +65,8 @@ def list_runs(log_dir: str | Path, limit: int = 20) -> list[dict[str, Any]]:
     if not dir_path.exists():
         return []
 
-    files = sorted(dir_path.glob("*.json"), reverse=True)[:limit]
+    all_files = sorted(dir_path.glob("*.json"), reverse=True)
+    files = all_files if limit == 0 else all_files[:limit]
     entries: list[dict[str, Any]] = []
     for f in files:
         try:

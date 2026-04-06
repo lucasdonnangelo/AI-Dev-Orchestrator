@@ -504,5 +504,118 @@ def batch(tasks_file: str, project_dir: str, yes: bool, stop_on_failure: bool, q
     )
 
 
+@cli.command()
+@click.option(
+    "--log-dir",
+    default="logs",
+    show_default=True,
+    help="Directory containing log files.",
+)
+def metrics(log_dir: str) -> None:
+    """Show analytics aggregated from all past orchestration runs."""
+    from datetime import datetime as _dt
+
+    entries = log_store.list_runs(log_dir, limit=0)
+    if not entries:
+        console.print("[yellow]No runs found in logs/[/yellow]")
+        return
+
+    total = len(entries)
+    approved = sum(1 for e in entries if e.get("status") == "approved")
+    escalated = sum(1 for e in entries if e.get("status") == "escalated")
+
+    scores = [
+        e["review"]["score"]
+        for e in entries
+        if e.get("review") and e["review"].get("score") is not None
+    ]
+    avg_score = sum(scores) / len(scores) if scores else None
+
+    attempts_list = [e.get("attempt", 1) for e in entries]
+    avg_attempts = sum(attempts_list) / len(attempts_list)
+
+    durations: list[float] = []
+    for e in entries:
+        started = e.get("started_at")
+        finished = e.get("finished_at")
+        if started and finished:
+            try:
+                s = _dt.fromisoformat(started)
+                f = _dt.fromisoformat(finished)
+                durations.append((f - s).total_seconds())
+            except ValueError:
+                pass
+    avg_duration = sum(durations) / len(durations) if durations else None
+
+    # First-attempt approval rate
+    first_attempt_approved = sum(
+        1 for e in entries if e.get("status") == "approved" and e.get("attempt", 1) == 1
+    )
+
+    # --- Summary table ---
+    summary = Table(title="Orchestrator Metrics", show_lines=True, border_style="blue")
+    summary.add_column("Metric", style="bold", min_width=28)
+    summary.add_column("Value", justify="right", min_width=20)
+
+    def pct(n: int) -> str:
+        return f"{n * 100 // total}%" if total else "—"
+
+    summary.add_row("Total runs", str(total))
+    summary.add_row(
+        "Approved",
+        f"[green]{approved}[/green]  ({pct(approved)})",
+    )
+    summary.add_row(
+        "Escalated",
+        f"[red]{escalated}[/red]  ({pct(escalated)})",
+    )
+    summary.add_row(
+        "1st-attempt approval",
+        f"{first_attempt_approved}  ({pct(first_attempt_approved)})",
+    )
+    summary.add_row(
+        "Avg review score",
+        f"{avg_score:.1f} / 10" if avg_score is not None else "—",
+    )
+    summary.add_row("Avg attempts per cycle", f"{avg_attempts:.2f}")
+    summary.add_row(
+        "Avg cycle duration",
+        f"{avg_duration:.0f}s" if avg_duration is not None else "—",
+    )
+    console.print(summary)
+
+    # --- Status breakdown bar ---
+    bar_width = 40
+    approved_blocks = round(approved * bar_width / total) if total else 0
+    escalated_blocks = bar_width - approved_blocks
+    bar = (
+        "[green]" + "#" * approved_blocks + "[/green]"
+        + "[red]" + "-" * escalated_blocks + "[/red]"
+    )
+    console.print(f"\n  [dim]approved[/dim] {bar} [dim]escalated[/dim]")
+
+    # --- Recent tasks (last 5) ---
+    recent = entries[:5]
+    if recent:
+        console.print()
+        recent_table = Table(title="Last 5 Runs", show_lines=False, border_style="dim")
+        recent_table.add_column("Date", style="dim", width=19)
+        recent_table.add_column("Status", width=10)
+        recent_table.add_column("Score", width=6, justify="center")
+        recent_table.add_column("Task")
+        for e in recent:
+            st = e.get("status", "?")
+            color = "green" if st == "approved" else "red"
+            started = (e.get("started_at") or "")[:19].replace("T", " ")
+            score = "—"
+            if e.get("review") and e["review"].get("score") is not None:
+                score = str(e["review"]["score"])
+            task_text = e.get("task", "")
+            if len(task_text) > 55:
+                task_text = task_text[:52] + "..."
+            recent_table.add_row(started, f"[{color}]{st}[/{color}]", score, task_text)
+        console.print(recent_table)
+
+
 if __name__ == "__main__":
     cli()
