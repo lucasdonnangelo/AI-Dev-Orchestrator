@@ -21,6 +21,7 @@ from orchestrator.models import CycleStatus
 from orchestrator import git as git_helpers
 from orchestrator import logger as log_store
 from orchestrator import orchestrator as orch
+from orchestrator import templates as tmpl
 from orchestrator.models import DecisionResult
 
 console = Console(highlight=False)
@@ -615,6 +616,91 @@ def metrics(log_dir: str) -> None:
                 task_text = task_text[:52] + "..."
             recent_table.add_row(started, f"[{color}]{st}[/{color}]", score, task_text)
         console.print(recent_table)
+
+
+@cli.command("init")
+@click.option(
+    "--template", "-t",
+    default=None,
+    metavar="NAME",
+    help="Template name to apply (fastapi, python-cli, react).",
+)
+@click.option(
+    "--list", "list_only",
+    is_flag=True,
+    help="List available templates and exit.",
+)
+@click.option(
+    "--dir", "-d",
+    "directory",
+    default=".",
+    show_default=True,
+    help="Target directory for the project (created if it does not exist).",
+)
+@click.option(
+    "--force", "-f",
+    is_flag=True,
+    help="Overwrite existing files without asking.",
+)
+def init(template: str | None, list_only: bool, directory: str, force: bool) -> None:
+    """Initialise a project from a template.
+
+    Creates .orchestrator.yaml and tasks.txt (plus any skeleton files) in the
+    target directory so you can start an orchestrated dev cycle immediately.
+
+    \b
+    Examples:
+      orchestrate init --list
+      orchestrate init --template fastapi --dir ./my-api
+      orchestrate init -t python-cli -d .
+    """
+    if list_only:
+        table = Table(title="Available Templates", show_lines=False, border_style="blue")
+        table.add_column("Name", style="bold cyan", width=14)
+        table.add_column("Description")
+        for t in tmpl.list_templates():
+            table.add_row(t.name, t.description)
+        console.print(table)
+        return
+
+    if not template:
+        console.print(
+            "[red]ERROR[/red] --template is required. "
+            "Run [bold]orchestrate init --list[/bold] to see available templates."
+        )
+        raise SystemExit(1)
+
+    selected = tmpl.get_template(template)
+    if selected is None:
+        available = ", ".join(t.name for t in tmpl.list_templates())
+        console.print(
+            f"[red]ERROR[/red] Unknown template '{template}'. "
+            f"Available: {available}"
+        )
+        raise SystemExit(1)
+
+    target = Path(directory).resolve()
+
+    try:
+        written = tmpl.init_project(selected, target, force=force)
+    except FileExistsError as exc:
+        console.print(f"[red]ERROR[/red] {exc}")
+        raise SystemExit(1)
+
+    console.print(
+        Panel(
+            f"[bold]{selected.name}[/bold] — {selected.description}\n"
+            f"[dim]Directory: {target}[/dim]",
+            title="Template applied",
+            border_style="green",
+        )
+    )
+    for rel in written:
+        console.print(f"  [green]+[/green] {rel}")
+
+    console.print(
+        f"\n[dim]Next step:[/dim] [bold]orchestrate batch tasks.txt -d {directory} -y[/bold]"
+    )
 
 
 if __name__ == "__main__":
