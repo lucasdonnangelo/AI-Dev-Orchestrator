@@ -13,14 +13,9 @@ from orchestrator.models import CriticResult, TaskPlan
 from orchestrator.providers import make_provider
 
 _PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "critic_system.md"
+_FALLBACK = "You are a plan critic. Evaluate the plan and return a JSON CriticResult."
 
 console = Console(highlight=False)
-
-
-def _load_system_prompt() -> str:
-    if _PROMPT_PATH.exists():
-        return _PROMPT_PATH.read_text(encoding="utf-8")
-    return "You are a plan critic. Evaluate the plan and return a JSON CriticResult."
 
 
 def _strip_fences(raw: str) -> str:
@@ -56,7 +51,10 @@ async def critique_plan(
     user_message += f"## Plan to Evaluate\n\n{plan.to_json(indent=2)}"
 
     provider = make_provider(config.critic_provider, config)
-    raw = await provider.call(prompt=user_message, system=_load_system_prompt())
+    raw = await provider.call(
+        prompt=user_message,
+        system=config.load_prompt("critic", _PROMPT_PATH, _FALLBACK),
+    )
     data = json.loads(_strip_fences(raw))
     data["round"] = round_num  # enforce correct round regardless of model output
     return CriticResult.from_dict(data)

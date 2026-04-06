@@ -13,12 +13,7 @@ if TYPE_CHECKING:
     from orchestrator.models import CriticResult
 
 _PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "planner_system.md"
-
-
-def _load_system_prompt() -> str:
-    if _PROMPT_PATH.exists():
-        return _PROMPT_PATH.read_text(encoding="utf-8")
-    return "You are a software planning assistant."
+_FALLBACK = "You are a software planning assistant."
 
 
 async def generate_plan(
@@ -55,7 +50,10 @@ async def generate_plan(
         )
 
     provider = make_provider(config.planner_provider, config)
-    raw = await provider.call(prompt=user_message, system=_load_system_prompt())
+    raw = await provider.call(
+        prompt=user_message,
+        system=config.load_prompt("planner", _PROMPT_PATH, _FALLBACK),
+    )
     return TaskPlan.from_json(raw)
 
 
@@ -90,5 +88,8 @@ async def refine_plan(
     )
 
     provider = make_provider(config.planner_provider, config)
-    raw = await provider.call(prompt=user_message, system=_load_system_prompt())
+    raw = await provider.call(
+        prompt=user_message,
+        system=config.load_prompt("planner", _PROMPT_PATH, _FALLBACK),
+    )
     return TaskPlan.from_json(raw)

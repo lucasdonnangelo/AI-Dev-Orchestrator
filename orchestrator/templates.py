@@ -39,6 +39,17 @@ critic_max_rounds: 5
 max_retries: 3
 git_conventional_commits: true
 # template: fastapi
+
+# --- Custom prompts (Phase 4.2) ---
+# Override any agent's system prompt with inline text or a path relative to
+# this directory.  Uncomment and edit to customise behaviour for your stack.
+#
+# prompts:
+#   planner: "prompts/my_planner.md"   # path relative to project root
+#   reviewer: |                         # inline multi-line text
+#     You are a strict FastAPI code reviewer.
+#     Focus on: Pydantic validation, async correctness, OpenAPI spec quality.
+#     Return JSON ReviewResult.
 """,
         "tasks.txt": """\
 # FastAPI Project — starter tasks
@@ -65,6 +76,11 @@ critic_max_rounds: 4
 max_retries: 3
 git_conventional_commits: true
 # template: python-cli
+
+# --- Custom prompts (Phase 4.2) ---
+# prompts:
+#   planner: "prompts/my_planner.md"
+#   reviewer: "You are a strict CLI code reviewer. Focus on click API usage and error handling."
 """,
         "tasks.txt": """\
 # Python CLI — starter tasks
@@ -92,6 +108,11 @@ critic_max_rounds: 5
 max_retries: 3
 git_conventional_commits: true
 # template: react
+
+# --- Custom prompts (Phase 4.2) ---
+# prompts:
+#   planner: "prompts/my_planner.md"
+#   reviewer: "You are a strict React/TypeScript reviewer. Focus on hooks rules, type safety, and accessibility."
 """,
         "tasks.txt": """\
 # React TypeScript — starter tasks

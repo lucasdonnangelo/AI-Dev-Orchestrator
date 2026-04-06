@@ -13,14 +13,9 @@ from orchestrator.providers import make_provider
 
 _PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "decisor_system.md"
 _SESSION_PATH = Path(__file__).resolve().parent.parent / "SESSAO_ATUAL.md"
+_FALLBACK = "You are a decisor. Validate coherence between plan and implementation. Return JSON DecisionResult."
 
 console = Console(highlight=False)
-
-
-def _load_system_prompt() -> str:
-    if _PROMPT_PATH.exists():
-        return _PROMPT_PATH.read_text(encoding="utf-8")
-    return "You are a decisor. Validate coherence between plan and implementation. Return JSON DecisionResult."
 
 
 def _load_session_context() -> str:
@@ -69,7 +64,10 @@ async def decide(
     )
 
     provider = make_provider(config.decisor_provider, config)
-    raw = await provider.call(prompt=user_message, system=_load_system_prompt())
+    raw = await provider.call(
+        prompt=user_message,
+        system=config.load_prompt("decisor", _PROMPT_PATH, _FALLBACK),
+    )
     result = DecisionResult.from_dict(json.loads(_strip_fences(raw)))
 
     status = "[OK] approved" if result.approved else "[X] rejected"

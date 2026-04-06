@@ -10,12 +10,7 @@ from orchestrator.models import ReviewResult, TaskPlan
 from orchestrator.providers import make_provider
 
 _PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "reviewer_system.md"
-
-
-def _load_system_prompt() -> str:
-    if _PROMPT_PATH.exists():
-        return _PROMPT_PATH.read_text(encoding="utf-8")
-    return "You are a code review assistant."
+_FALLBACK = "You are a code review assistant."
 
 
 def _strip_fences(raw: str) -> str:
@@ -55,5 +50,8 @@ async def review_code(
     )
 
     provider = make_provider(config.reviewer_provider, config)
-    raw = await provider.call(prompt=user_message, system=_load_system_prompt())
+    raw = await provider.call(
+        prompt=user_message,
+        system=config.load_prompt("reviewer", _PROMPT_PATH, _FALLBACK),
+    )
     return ReviewResult.from_dict(json.loads(_strip_fences(raw)))

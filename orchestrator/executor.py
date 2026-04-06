@@ -14,14 +14,8 @@ from orchestrator.models import TaskPlan
 _CONTEXT_PATH = Path(__file__).resolve().parent / "prompts" / "executor_context.md"
 
 
-def _load_context() -> str:
-    if _CONTEXT_PATH.exists():
-        return _CONTEXT_PATH.read_text(encoding="utf-8")
-    return ""
-
-
-def _build_prompt(plan: TaskPlan, feedback: str) -> str:
-    context = _load_context()
+def _build_prompt(plan: TaskPlan, feedback: str, config: Config) -> str:
+    context = config.load_prompt("executor", _CONTEXT_PATH, "")
     parts = [context] if context else []
 
     parts.append("## Plan\n")
@@ -96,7 +90,7 @@ async def execute_plan(
     Returns:
         A unified diff string of all changes made.
     """
-    prompt = _build_prompt(plan, feedback)
+    prompt = _build_prompt(plan, feedback, config)
 
     options = ClaudeAgentOptions(
         allowed_tools=config.executor_allowed_tools,

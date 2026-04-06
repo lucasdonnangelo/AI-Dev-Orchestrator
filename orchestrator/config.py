@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
 from dotenv import load_dotenv
@@ -52,6 +53,11 @@ class Config:
     # --- Git ---
     git_auto_branch: bool = False
     git_conventional_commits: bool = True
+
+    # --- Prompt overrides ---
+    # Keys: "planner", "critic", "reviewer", "decisor", "executor"
+    # Values: inline prompt text OR a file path relative to project_dir
+    prompt_overrides: dict[str, str] = field(default_factory=dict)
 
     # ------------------------------------------------------------------
     # Factory
@@ -121,6 +127,11 @@ class Config:
             os.getenv("GIT_CONVENTIONAL_COMMITS", data.get("git_conventional_commits", True))
         ).lower() not in {"0", "false", "no"}
 
+        prompt_overrides: dict[str, str] = {}
+        raw_prompts = data.get("prompts", {})
+        if isinstance(raw_prompts, dict):
+            prompt_overrides = {k: str(v) for k, v in raw_prompts.items()}
+
         return cls(
             api_key=api_key,
             model=model,
@@ -146,7 +157,37 @@ class Config:
             project_dir=str(project_path),
             git_auto_branch=git_auto_branch,
             git_conventional_commits=git_conventional_commits,
+            prompt_overrides=prompt_overrides,
         )
+
+    def load_prompt(self, role: str, default_path: Path, fallback: str = "") -> str:
+        """Return the system prompt for *role*, respecting project-level overrides.
+
+        Resolution order:
+        1. ``prompt_overrides[role]`` — the value is treated as:
+           a. A file path relative to ``project_dir`` (if the resolved path exists).
+           b. Inline prompt text (otherwise).
+        2. ``default_path`` — the bundled prompt file shipped with the orchestrator.
+        3. ``fallback`` — a hard-coded string used when neither of the above exists.
+
+        Args:
+            role: Agent role key, e.g. ``"planner"``, ``"critic"``, ``"reviewer"``,
+                  ``"decisor"``, or ``"executor"``.
+            default_path: Absolute path to the bundled ``.md`` prompt file.
+            fallback: Minimal inline prompt used when the bundled file is missing.
+
+        Returns:
+            The resolved prompt text as a string.
+        """
+        override = self.prompt_overrides.get(role)
+        if override:
+            candidate = Path(self.project_dir) / override
+            if candidate.exists():
+                return candidate.read_text(encoding="utf-8")
+            return override
+        if default_path.exists():
+            return default_path.read_text(encoding="utf-8")
+        return fallback
 
     def validate(self) -> list[str]:
         """Return list of validation errors (empty = OK)."""
