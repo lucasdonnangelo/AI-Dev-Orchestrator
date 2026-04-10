@@ -852,13 +852,13 @@ def init(template: str | None, list_only: bool, directory: str, force: bool) -> 
     "--host",
     default="127.0.0.1",
     show_default=True,
-    help="Host to bind the API server.",
+    help="Host to bind the server.",
 )
 @click.option(
     "--port",
     default=8000,
     show_default=True,
-    help="Port for the API server.",
+    help="Port for the server (API + optional frontend).",
 )
 @click.option(
     "--no-browser",
@@ -868,8 +868,10 @@ def init(template: str | None, list_only: bool, directory: str, force: bool) -> 
 def dashboard(host: str, port: int, no_browser: bool) -> None:
     """Start the dashboard web server.
 
-    Launches the FastAPI backend on localhost:8000 and (when available)
-    the React frontend on localhost:3000.  Press Ctrl+C to stop both.
+    Launches the FastAPI backend on the given port.  If a production build of
+    the React frontend exists in ``dashboard/dist/`` it is served from the
+    same port at ``/`` (no separate process needed).  API endpoints remain at
+    ``/api/*``.  Press Ctrl+C to stop.
 
     \b
     Examples:
@@ -883,27 +885,45 @@ def dashboard(host: str, port: int, no_browser: bool) -> None:
         console.print("[red]ERROR[/red] uvicorn is not installed. Run: pip install uvicorn")
         raise SystemExit(1)
 
+    import threading
     import webbrowser
-    from orchestrator.server import app
+    from orchestrator.server import app, mount_frontend
 
-    url = f"http://{host}:{port}"
+    # Locate the built frontend: dashboard/dist/ relative to the repo root.
+    # __file__ is orchestrator/cli.py -> parent is orchestrator/ -> parent is repo root.
+    project_root = Path(__file__).resolve().parent.parent
+    dist_path = project_root / "dashboard" / "dist"
+    frontend_available = dist_path.is_dir() and (dist_path / "index.html").exists()
+
+    base_url = f"http://{host}:{port}"
+    api_url = f"{base_url}/api"
+    docs_url = f"{base_url}/docs"
+
+    if frontend_available:
+        mount_frontend(dist_path)
+        browser_url = base_url
+        fe_line = f"Frontend: [link={browser_url}]{browser_url}[/link]"
+    else:
+        browser_url = docs_url
+        fe_line = "[dim]Frontend: not built — run: cd dashboard && npm run build[/dim]"
+
     console.print(
         Panel(
-            f"[bold]AI Dev Orchestrator Dashboard[/bold]\n"
-            f"API: [link={url}]{url}[/link]\n"
-            f"[dim]Press Ctrl+C to stop.[/dim]",
+            "[bold]AI Dev Orchestrator Dashboard[/bold]\n"
+            f"API:  [link={api_url}]{api_url}[/link]\n"
+            f"Docs: [link={docs_url}]{docs_url}[/link]\n"
+            f"{fe_line}\n"
+            "[dim]Press Ctrl+C to stop.[/dim]",
             title="Dashboard",
             border_style="blue",
         )
     )
 
     if not no_browser:
-        # Open after a short delay so the server has time to start
-        import threading
         def _open() -> None:
             import time
             time.sleep(1.5)
-            webbrowser.open(url + "/api/health")
+            webbrowser.open(browser_url)
         threading.Thread(target=_open, daemon=True).start()
 
     uvicorn.run(app, host=host, port=port)

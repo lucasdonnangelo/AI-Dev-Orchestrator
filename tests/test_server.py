@@ -724,3 +724,55 @@ class TestRunStateHasPauseController:
         a = RunState(run_id="a", task="t", project_dir=".")
         b = RunState(run_id="b", task="t", project_dir=".")
         assert a.pause_controller is not b.pause_controller
+
+
+# ---------------------------------------------------------------------------
+# mount_frontend
+# ---------------------------------------------------------------------------
+
+class TestMountFrontend:
+    """Tests for the mount_frontend helper."""
+
+    @pytest.fixture(autouse=True)
+    def _unmount(self):
+        """Remove the 'frontend' mount from the app after each test."""
+        yield
+        # FastAPI stores mounts in app.router.routes; remove any added by tests.
+        app.router.routes[:] = [
+            r for r in app.router.routes
+            if getattr(r, "name", None) != "frontend"
+        ]
+
+    def test_mount_serves_index_html(self, tmp_path: Path):
+        from orchestrator.server import mount_frontend
+
+        dist = tmp_path / "dist"
+        dist.mkdir()
+        (dist / "index.html").write_text("<html>Dashboard</html>")
+
+        mount_frontend(dist)
+
+        client = TestClient(app)
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert "Dashboard" in resp.text
+
+    def test_api_health_still_reachable_after_mount(self, tmp_path: Path):
+        from orchestrator.server import mount_frontend
+
+        dist = tmp_path / "dist"
+        dist.mkdir()
+        (dist / "index.html").write_text("<html>ok</html>")
+
+        mount_frontend(dist)
+
+        client = TestClient(app)
+        resp = client.get("/api/health")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+
+    def test_mount_missing_dist_raises(self, tmp_path: Path):
+        from orchestrator.server import mount_frontend
+
+        with pytest.raises(Exception):
+            mount_frontend(tmp_path / "nonexistent")

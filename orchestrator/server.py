@@ -583,6 +583,33 @@ async def health() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Frontend static-file mounting (called by CLI before uvicorn.run)
+# ---------------------------------------------------------------------------
+
+def mount_frontend(dist_path: Path | str) -> None:
+    """Mount a built React frontend as static files served from ``/``.
+
+    Must be called *before* starting uvicorn so that the route is registered
+    at startup.  API routes defined above take precedence over static files,
+    so ``/api/*`` and ``/ws/*`` continue to work normally.
+
+    The ``html=True`` option instructs FastAPI to return ``index.html`` for
+    any path that does not match a static file — required for React
+    client-side routing (e.g. ``/projects``, ``/history``).
+
+    Args:
+        dist_path: Path to the ``dist/`` directory produced by ``npm run build``.
+    """
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount(
+        "/",
+        StaticFiles(directory=str(dist_path), html=True),
+        name="frontend",
+    )
+
+
+# ---------------------------------------------------------------------------
 # WebSocket — real-time event streaming
 # ---------------------------------------------------------------------------
 
