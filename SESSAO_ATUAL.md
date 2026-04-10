@@ -1,6 +1,6 @@
 # Sessao Atual — AI Dev Orchestrator
 
-**Ultima atualizacao:** 05/04/2026
+**Ultima atualizacao:** 10/04/2026
 **Branch:** main
 
 ---
@@ -22,6 +22,7 @@ Voce (task)
                --> Voce confirma commit (mensagem convencional automatica)
                --> Se git_auto_branch=True: PR description gerada
   --> ESCALADO  --> Voce intervem manualmente
+                --> Modo interativo: editar plano/codigo, chat com agente, resubmeter
 ```
 
 ---
@@ -42,24 +43,25 @@ Voce (task)
 | 3.3 — Git Avancado | git.py: branch por task, conventional commits, PR description | COMPLETA |
 | 3.4 — Melhorias de CLI | stage messages coloridas [1/5..5/5], --quiet/-q, --verbose/-v | COMPLETA |
 | 3.5 — Metricas | orchestrate metrics: stats agregadas de todos os logs | COMPLETA |
-| 4+ | Templates, plugins, modo interativo | pendente |
+| 4.1 — Templates de Projeto | orchestrate init --template fastapi/python-cli/react | COMPLETA |
+| 4.2 — Prompts Customizaveis | override de system prompts via .orchestrator.yaml, 3-layer resolution | COMPLETA |
+| 4.3 — Plugin de Providers | registro dinamico de providers em runtime via config | COMPLETA |
+| 4.4 — Modo Interativo | chat REPL com agentes, editar plano/codigo pos-escalacao, retry/edit | COMPLETA |
+| 5 — Dashboard Visual | FastAPI backend + React frontend + WebSocket streaming | PROXIMA |
 
 ---
 
 ## Ultima tarefa aprovada
 
-**Tarefa:** Fase 3 completa (3.1 a 3.5)
-**Commits:** feat: Phase 3.1 (context loader) + fases 3.2-3.5 pendentes de commit
+**Tarefa:** Fase 4.4 — Modo Interativo (chat REPL, post-escalation retry/edit)
+**Commit:** 29c6938 feat: Phase 4.4 - interactive mode with chat REPL, post-escalation retry/edit
 
-**Arquivos criados:**
-- orchestrator/context.py
-- orchestrator/git.py
-
-**Arquivos modificados:**
-- orchestrator/orchestrator.py — context loader integrado, stage messages coloridas [1/5..5/5]
-- orchestrator/config.py — campos git_auto_branch e git_conventional_commits
-- orchestrator/logger.py — list_runs suporta limit=0 (todos os logs)
-- orchestrator/cli.py — batch, metrics, quiet/verbose, git hooks no commit
+**Arquivos criados/modificados na Fase 4:**
+- orchestrator/templates.py — templates FastAPI, Python CLI, React
+- orchestrator/chat.py — REPL interativo e single-turn com agentes
+- orchestrator/config.py — suporte a 3-layer resolution de prompts
+- orchestrator/providers/__init__.py — plugin registry + registro dinamico
+- orchestrator/cli.py — comandos init, chat; modo interativo pos-escalacao
 
 ---
 
@@ -80,6 +82,7 @@ call_with_retry(fn, *, max_attempts, base_delay, max_delay, retryable, delay_ext
   -- max_retry_delay: se delay > limite, re-raise imediato (quota diaria esgotada)
 
 make_provider(name, config) -> BaseAgent
+Plugin registry: register_provider(name, cls) para providers externos em runtime
 ```
 
 ### Agentes
@@ -114,6 +117,47 @@ get_current_branch(project_dir)      -- branch atual
 build_pr_description(task, record)   -- markdown com plan/review/decision sem chamada de AI
 ```
 
+### Templates (`orchestrator/templates.py`)
+
+```
+Template(name, description, files: dict[str, str])
+  -- fastapi     : pyproject.toml + app/main.py + tasks.txt + .orchestrator.yaml
+  -- python-cli  : pyproject.toml + src/main.py + tasks.txt + .orchestrator.yaml
+  -- react       : package.json + src/App.jsx + tasks.txt + .orchestrator.yaml
+
+orchestrate init --template <name> [-d project_dir]
+  -- cria estrutura de arquivos do template no diretorio alvo
+```
+
+### Chat / Modo Interativo (`orchestrator/chat.py`)
+
+```
+chat_with_agent(role, message, config, project_dir) -> str
+  -- single-turn: envia mensagem para qualquer agente e retorna resposta
+  -- roles: planner, critic, reviewer, decisor
+
+interactive_chat(role, config, project_dir)
+  -- REPL interativo: loop de conversa com agente escolhido
+  -- /exit ou /quit para sair
+
+post_escalation_menu(record, config, project_dir)
+  -- pos-escalacao: opcoes de editar plano, editar codigo, chat, resubmeter
+```
+
+### Config — 3-layer resolution
+
+```
+1. Defaults globais (codigo)
+2. ~/.orchestrator/config.yaml (usuario)
+3. <project_dir>/.orchestrator.yaml (projeto) -- maior prioridade
+
+Campos de override de prompts:
+  planner_prompt_extra: "..."   -- append ao system prompt do Planner
+  critic_prompt_extra: "..."    -- append ao system prompt do Critico
+  reviewer_prompt_extra: "..."  -- append ao system prompt do Reviewer
+  decisor_prompt_extra: "..."   -- append ao system prompt do Decisor
+```
+
 ### CLI (`orchestrator/cli.py`)
 
 ```
@@ -129,6 +173,12 @@ orchestrate batch TASKS_FILE [OPTIONS]
   -q / -v   propagados para cada task
   --stop-on-failure   para no primeiro erro sem perguntar
   Formatos: .txt (uma task por linha, # = comentario) ou .json (array)
+
+orchestrate init --template <name> [-d project_dir]
+  -- cria estrutura de projeto a partir de template
+
+orchestrate chat --role <role> [-d project_dir]
+  -- REPL interativo com agente escolhido (planner/critic/reviewer/decisor)
 
 orchestrate metrics [--log-dir logs]
   -- total/aprovados/escalados + %, taxa 1a tentativa
@@ -196,11 +246,23 @@ CycleRecord    -- task, status, plan, review, decision, attempt,
 
 ## Proximos passos imediatos
 
-1. **Fase 4.1 — Templates de Projeto:** `orchestrate init --template fastapi/python-cli/react`
-2. **Fase 4.2 — Prompts Customizaveis:** override de system prompts via `.orchestrator.yaml`
-3. **Fase 4.3 — Plugin de Providers:** interface para adicionar Mistral, Llama, etc.
-4. **Fase 4.4 — Modo Interativo:** editar plano/codigo antes de resubmeter, chat com agente
-5. **Testar ciclo end-to-end** apos reset da quota Gemini (free tier: 20 req/dia)
+1. **Fase 5.1 — Backend API e WebSocket:**
+   - `orchestrator/events.py` — EventBus pub/sub com tipos de evento por etapa
+   - `orchestrator/server.py` — FastAPI com REST + WebSocket
+   - Endpoints: /api/run, /api/batch, /api/cancel, /api/pause, /api/resume, /api/projects, /api/history, /api/metrics
+   - WS /ws/run/{run_id} — streaming de eventos tempo real
+   - Comando `orchestrate dashboard` no cli.py
+
+2. **Fase 5.2 — Frontend Dashboard Base:**
+   - React + Vite + Tailwind em `dashboard/`
+   - Tela inicial: campo de task, selecao de projeto, botao executar
+   - Painel de execucao: 5 cards com status de cada agente em tempo real
+   - Controles: pausar, cancelar, editar plano
+   - Monitor de tokens e custo
+
+3. **Fases 5.3 a 5.5** — gestao de projetos, execucao por fases, historico e metricas visual
+
+Plano detalhado: `docs/Fase5_Dashboard_Plano.md`
 
 ---
 
@@ -215,6 +277,12 @@ python -m orchestrator.cli run "sua task aqui" -d /caminho/do/projeto -y
 
 # Rodar batch de tasks
 python -m orchestrator.cli batch tasks.txt -d /caminho/do/projeto -y
+
+# Iniciar projeto a partir de template
+python -m orchestrator.cli init --template fastapi -d /caminho/do/novo/projeto
+
+# Chat interativo com agente
+python -m orchestrator.cli chat --role planner -d /caminho/do/projeto
 
 # Ver metricas agregadas
 python -m orchestrator.cli metrics
@@ -235,3 +303,4 @@ pytest tests/ -v
 
 Pasta `cobaia/` na raiz — submodulo Git separado usado para testar o orquestrador.
 Contem: `main.py`, `hello.py`, `add.py`, `multiply.py`, `subtract.py`, `divide.py` e respectivos testes pytest.
+6/6 tasks do batch cobaia aprovadas em validacao end-to-end.

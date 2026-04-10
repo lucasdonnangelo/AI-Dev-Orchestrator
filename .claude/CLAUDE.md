@@ -2,17 +2,17 @@
 
 ## O Que E Este Projeto
 
-**AI Dev Orchestrator** — sistema CLI em Python que automatiza o ciclo de desenvolvimento usando multiplas IAs com papeis separados e validacao em camadas.
+**AI Dev Orchestrator** — sistema CLI + dashboard web que automatiza o ciclo de desenvolvimento usando multiplas IAs com papeis separados e validacao em camadas.
 
 ### Papeis das IAs
 
-| Papel | O que faz | Provider |
-|-------|-----------|----------|
-| **Planner** | Gera plano estruturado a partir de uma task | Claude (Anthropic) |
-| **Critico** | Critica e melhora o plano (2-5 rounds) | Gemini (Google) |
-| **Executor** | Implementa o codigo seguindo o plano | Claude Code (Agent SDK) |
-| **Reviewer** | Avalia qualidade do codigo gerado | Gemini (Google) |
-| **Decisor** | Valida coerencia com o plano geral | Gemini (Google) |
+| Papel | O que faz | Provider | Modelo |
+|-------|-----------|----------|--------|
+| **Planner** | Gera plano estruturado | Claude (Anthropic) | claude-sonnet-4-6 |
+| **Critico** | Critica e melhora o plano (2-5 rounds) | Gemini (Google) | gemini-2.5-flash |
+| **Executor** | Implementa o codigo | Claude Code (Agent SDK) | — |
+| **Reviewer** | Avalia qualidade do codigo | Gemini (Google) | gemini-2.5-flash |
+| **Decisor** | Valida coerencia com o plano | Gemini (Google) | gemini-2.5-flash |
 
 **Principio:** Claude planeja e executa. Gemini critica, revisa e valida. Elimina vies.
 
@@ -34,12 +34,55 @@ Voce (task)
 
 - **Python 3.10+**
 - **anthropic** SDK — Planner
-- **claude-agent-sdk** v0.1.54 — Executor
-- **google-genai** >= 1.0.0 — Gemini (Critico, Reviewer, Decisor)
-- **openai** >= 1.50.0 — OpenAI como fallback opcional (implementado, nao usado por padrao)
-- **click** — CLI framework
-- **rich** — output formatado no terminal
-- **python-dotenv** + **pyyaml** — configuracao
+- **claude-agent-sdk** — Executor
+- **google-genai** — Gemini (Critico, Reviewer, Decisor)
+- **openai** — fallback opcional
+- **click** + **rich** — CLI
+- **FastAPI** + **uvicorn** — Backend do dashboard [Fase 5]
+- **React** + **Tailwind** + **Vite** — Frontend do dashboard [Fase 5]
+- **WebSocket** — streaming tempo real [Fase 5]
+
+## Status Atual
+
+### [OK] Fase 1 — MVP (COMPLETA)
+### [OK] Fase 2 — Multi-Model e Robustez (COMPLETA)
+### [OK] Fase 3 — Orquestracao Avancada (COMPLETA)
+### [OK] Fase 4 — Extensibilidade (COMPLETA)
+
+175 testes passando. 6/6 tasks do batch cobaia aprovadas. Sistema validado end-to-end.
+
+### [>>] Fase 5 — Dashboard Visual (PROXIMA)
+
+Plano detalhado em: `docs/Fase5_Dashboard_Plano.md`
+
+#### 5.1 Backend API e WebSocket
+- `orchestrator/events.py` — EventBus pub/sub com tipos de evento por etapa
+- `orchestrator/server.py` — FastAPI com REST + WebSocket
+- Endpoints: /api/run, /api/batch, /api/cancel, /api/pause, /api/resume, /api/projects, /api/history, /api/metrics
+- WS /ws/run/{run_id} — streaming de eventos tempo real
+- Comando `orchestrate dashboard` no cli.py
+
+#### 5.2 Frontend — Dashboard Base
+- React + Vite + Tailwind em `dashboard/`
+- Tela inicial: campo de task, selecao de projeto, botao executar
+- Painel de execucao: 5 cards com status de cada agente em tempo real
+- Controles: pausar, cancelar, editar plano
+- Monitor de tokens e custo
+
+#### 5.3 Frontend — Gestao de Projetos
+- Lista de projetos registrados com stack, historico
+- Novo projeto via wizard com templates
+- Config visual do .orchestrator.yaml
+
+#### 5.4 Frontend — Execucao por Fases
+- Descrever projeto inteiro, Planner quebra em fases/tasks
+- Executar fase por fase com revisao entre cada uma
+- Timeline/kanban de progresso
+
+#### 5.5 Frontend — Historico e Metricas Visual
+- Graficos de aprovacao, custos, tempo
+- Diff viewer com syntax highlighting
+- Detalhes expandiveis de cada ciclo
 
 ## Estrutura do Projeto
 
@@ -47,99 +90,39 @@ Voce (task)
 ai-dev-orchestrator/
 ├── orchestrator/
 │   ├── __init__.py
-│   ├── cli.py               # CLI com click (entrypoint: orchestrate)
-│   ├── config.py             # Carrega .env + YAML, resolve Config
-│   ├── models.py             # TaskPlan, ReviewResult, CycleRecord
-│   ├── planner.py            # [OK] Planner — usa providers/
-│   ├── executor.py           # [OK] Executor — claude-agent-sdk
-│   ├── reviewer.py           # [OK] Reviewer — usa providers/
-│   ├── orchestrator.py       # [OK] Loop Planner->Executor->Reviewer
-│   ├── critic.py             # [FASE 2.2] Critico do Plano
-│   ├── decisor.py            # [FASE 2.3] Decisor pos-review
+│   ├── cli.py               # [OK] CLI com click
+│   ├── config.py             # [OK] Config com 3-layer resolution
+│   ├── models.py             # [OK] TaskPlan, ReviewResult, CycleRecord, CriticResult, DecisionResult
+│   ├── planner.py            # [OK] Planner via provider
+│   ├── executor.py           # [OK] Executor via Agent SDK
+│   ├── reviewer.py           # [OK] Reviewer via provider
+│   ├── critic.py             # [OK] Critico iterativo
+│   ├── decisor.py            # [OK] Decisor pos-review
+│   ├── chat.py               # [OK] REPL interativo
+│   ├── context.py            # [OK] Contexto inteligente
+│   ├── git.py                # [OK] Branch, commit, PR description
+│   ├── logger.py             # [OK] Logging JSON
+│   ├── metrics.py            # [OK] Analytics
+│   ├── session.py            # [OK] SESSAO_ATUAL.md automatizado
+│   ├── templates.py          # [OK] Templates de projeto
+│   ├── events.py             # [FASE 5.1] EventBus
+│   ├── server.py             # [FASE 5.1] FastAPI backend
 │   ├── providers/
-│   │   ├── __init__.py       # [OK] Factory make_provider()
-│   │   ├── base.py           # [OK] BaseAgent(ABC)
+│   │   ├── __init__.py       # [OK] Factory + plugin registry
+│   │   ├── base.py           # [OK] BaseAgent
 │   │   ├── anthropic.py      # [OK] ClaudeProvider
-│   │   ├── google.py         # [OK] GeminiProvider (gemini-2.5-flash)
-│   │   └── openai.py         # [OK] OpenAIProvider (fallback)
-│   └── prompts/
-│       ├── planner_system.md     # [OK]
-│       ├── reviewer_system.md    # [OK]
-│       ├── executor_context.md   # [OK]
-│       ├── critic_system.md      # [FASE 2.2]
-│       └── decisor_system.md     # [FASE 2.3]
+│   │   ├── google.py         # [OK] GeminiProvider
+│   │   ├── openai.py         # [OK] OpenAIProvider
+│   │   └── retry.py          # [OK] Retry com backoff
+│   └── prompts/              # [OK] System prompts (6 arquivos)
+├── dashboard/                # [FASE 5.2] React + Vite
 ├── configs/
-│   └── default.yaml
 ├── logs/
 ├── docs/
-│   └── AI_Dev_Orchestrator_Plano_v2.md
-├── SESSAO_ATUAL.md           # [FASE 2.4] Atualizado automaticamente
-├── .env
-├── .gitignore
-├── requirements.txt
-├── pyproject.toml
-└── README.md
-```
-
-## Status Atual
-
-### [OK] Fase 1 — MVP Funcional (COMPLETA)
-- Planner, Executor, Reviewer, Orquestrador, CLI — tudo funcionando
-- Testado end-to-end com projeto cobaia
-
-### [OK] Fase 2.1 — Arquitetura Multi-Provider (COMPLETA)
-- BaseAgent abstrato com metodo `async call(prompt, system) -> str`
-- ClaudeProvider (anthropic SDK)
-- GeminiProvider (google-genai, modelo padrao: gemini-2.5-flash)
-- OpenAIProvider (openai SDK, fallback opcional)
-- Factory `make_provider(name, config)` em providers/__init__.py
-- Config atualizada com campos por provider e por papel
-- Planner e Reviewer ja migrados para usar providers
-- Backward compatible — default continua anthropic se nao configurar
-
-### [>>] Fase 2.2 — Critico do Plano (PROXIMA)
-- Criar `orchestrator/critic.py`
-- Criar `orchestrator/prompts/critic_system.md`
-- Loop iterativo Planner <-> Critico (min 2, max 5 rounds)
-- Critico usa Gemini via `make_provider(config.critic_provider, config)`
-- Retorna `CriticResult` (nova dataclass em models.py)
-- Integrar no orchestrator.py (entre Planner e Executor)
-
-### [ ] Fase 2.3 — Decisor
-### [ ] Fase 2.4 — SESSAO_ATUAL.md Automatizado
-### [ ] Fase 2.5 — Robustez
-### [ ] Fase 2.6 — Logging e Historico
-### [ ] Fase 3 — Orquestracao Avancada
-### [ ] Fase 4 — Extensibilidade
-
-## Modelos de Dados (models.py)
-
-### Existentes
-```python
-class TaskPlan:        # description, files_to_create, files_to_modify, steps, acceptance_criteria, estimated_complexity
-class ReviewResult:    # approved, score, issues, suggestions, summary
-class ReviewIssue:     # severity, description, file, line, suggestion
-class CycleRecord:     # task, status, plan, review, attempt, started_at, finished_at, commit_hash
-```
-
-### Novos (Fase 2.2+)
-```python
-class CriticResult:    # consensus, observations, suggestions, score, round
-class DecisionResult:  # approved, reasoning, inconsistencies
-```
-
-## Config (.env)
-
-```
-ANTHROPIC_API_KEY=sk-ant-...      # Obrigatorio
-GOOGLE_API_KEY=AIza...            # Obrigatorio (Critico, Reviewer, Decisor usam Gemini)
-OPENAI_API_KEY=sk-...             # Opcional (fallback)
-ORCHESTRATOR_MODEL=claude-sonnet-4-6
-GOOGLE_MODEL=gemini-2.5-flash
-PLANNER_PROVIDER=anthropic        # default
-CRITIC_PROVIDER=google            # default
-REVIEWER_PROVIDER=google          # default
-DECISOR_PROVIDER=google           # default
+│   ├── AI_Dev_Orchestrator_Plano.md
+│   └── Fase5_Dashboard_Plano.md
+├── tests/                    # [OK] 175 testes
+└── ...
 ```
 
 ## Convencoes de Codigo
@@ -151,10 +134,12 @@ DECISOR_PROVIDER=google           # default
 - Testes: pytest + pytest-asyncio
 - Sem emojis Unicode no output (compatibilidade Windows cp1252)
 - Marcadores ASCII: [OK], [X], [!]
+- Frontend: React funcional com hooks, Tailwind utility classes
 
 ## Referencias
 
-- Plano completo: `docs/AI_Dev_Orchestrator_Plano.md`
-- Anthropic Python SDK: https://github.com/anthropics/anthropic-sdk-python
+- Plano geral: `docs/AI_Dev_Orchestrator_Plano.md`
+- Plano Fase 5: `docs/Fase5_Dashboard_Plano.md`
+- Anthropic SDK: https://github.com/anthropics/anthropic-sdk-python
 - Claude Agent SDK: https://pypi.org/project/claude-agent-sdk/
 - Google GenAI SDK: https://github.com/googleapis/python-genai
