@@ -847,5 +847,67 @@ def init(template: str | None, list_only: bool, directory: str, force: bool) -> 
     )
 
 
+@cli.command("dashboard")
+@click.option(
+    "--host",
+    default="127.0.0.1",
+    show_default=True,
+    help="Host to bind the API server.",
+)
+@click.option(
+    "--port",
+    default=8000,
+    show_default=True,
+    help="Port for the API server.",
+)
+@click.option(
+    "--no-browser",
+    is_flag=True,
+    help="Do not open the browser automatically.",
+)
+def dashboard(host: str, port: int, no_browser: bool) -> None:
+    """Start the dashboard web server.
+
+    Launches the FastAPI backend on localhost:8000 and (when available)
+    the React frontend on localhost:3000.  Press Ctrl+C to stop both.
+
+    \b
+    Examples:
+      orchestrate dashboard
+      orchestrate dashboard --port 9000
+      orchestrate dashboard --no-browser
+    """
+    try:
+        import uvicorn
+    except ImportError:
+        console.print("[red]ERROR[/red] uvicorn is not installed. Run: pip install uvicorn")
+        raise SystemExit(1)
+
+    import webbrowser
+    from orchestrator.server import app
+
+    url = f"http://{host}:{port}"
+    console.print(
+        Panel(
+            f"[bold]AI Dev Orchestrator Dashboard[/bold]\n"
+            f"API: [link={url}]{url}[/link]\n"
+            f"[dim]Press Ctrl+C to stop.[/dim]",
+            title="Dashboard",
+            border_style="blue",
+        )
+    )
+
+    if not no_browser:
+        # Open after a short delay so the server has time to start
+        import threading
+        def _open() -> None:
+            import time
+            time.sleep(1.5)
+            webbrowser.open(url + "/api/health")
+        threading.Thread(target=_open, daemon=True).start()
+
+    uvicorn.run(app, host=host, port=port)
+
+
 if __name__ == "__main__":
     cli()

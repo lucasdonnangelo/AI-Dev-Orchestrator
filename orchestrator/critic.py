@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from rich.console import Console
 
@@ -11,6 +12,9 @@ from orchestrator import planner as planner_module
 from orchestrator.config import Config
 from orchestrator.models import CriticResult, TaskPlan
 from orchestrator.providers import make_provider
+
+if TYPE_CHECKING:
+    from orchestrator.events import EventBus
 
 _PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "critic_system.md"
 _FALLBACK = "You are a plan critic. Evaluate the plan and return a JSON CriticResult."
@@ -65,6 +69,7 @@ async def run_critic_loop(
     plan: TaskPlan,
     config: Config,
     session_context: str = "",
+    event_bus: EventBus | None = None,
 ) -> TaskPlan:
     """Iterative Planner <-> Critic refinement loop.
 
@@ -83,6 +88,8 @@ async def run_critic_loop(
     """
     current_plan = plan
 
+    from orchestrator.events import EventType
+
     for round_num in range(1, config.critic_max_rounds + 1):
         result = await critique_plan(current_plan, config, round_num, session_context=session_context)
 
@@ -92,8 +99,23 @@ async def run_critic_loop(
             f"— score {result.score}/10 — {status}[/dim]"
         )
 
+        if event_bus is not None:
+            await event_bus.emit(EventType.CRITIC_ROUND, {
+                "round": round_num,
+                "score": result.score,
+                "consensus": result.consensus,
+                "observations": result.observations,
+                "suggestions": result.suggestions,
+            })
+
         # Stop if consensus reached and minimum rounds satisfied
         if result.consensus and round_num >= config.critic_min_rounds:
+            if event_bus is not None:
+                await event_bus.emit(EventType.CRITIC_CONSENSUS, {
+                    "round": round_num,
+                    "score": result.score,
+                    "plan": current_plan.to_dict(),
+                })
             break
 
         # Stop if we've exhausted all rounds (use best plan we have)
