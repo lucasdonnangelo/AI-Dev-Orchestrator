@@ -10,7 +10,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
+from orchestrator.events import EventType
 from orchestrator.models import CycleRecord, CycleStatus, TaskPlan, Complexity
 from orchestrator.server import (
     RunState,
@@ -399,3 +401,181 @@ class TestRunState:
         a = RunState(run_id="a", task="t", project_dir=".")
         b = RunState(run_id="b", task="t", project_dir=".")
         assert a.event_bus is not b.event_bus
+
+    def test_event_bus_run_id_matches_run_state(self):
+        state = RunState(run_id="my-run-42", task="t", project_dir=".")
+        assert state.event_bus.run_id == "my-run-42"
+
+    def test_event_history_starts_empty(self):
+        state = RunState(run_id="x", task="t", project_dir=".")
+        assert state.event_history == []
+
+    def test_client_queues_starts_empty(self):
+        state = RunState(run_id="x", task="t", project_dir=".")
+        assert state._client_queues == []
+
+
+# ---------------------------------------------------------------------------
+# RunState event capture (async — emitting via EventBus)
+# ---------------------------------------------------------------------------
+
+class TestRunStateCapture:
+    async def test_emitted_event_appended_to_history(self):
+        state = RunState(run_id="cap-1", task="t", project_dir=".")
+        await state.event_bus.emit(EventType.PLAN_STARTED, {"task": "t"})
+        assert len(state.event_history) == 1
+        assert state.event_history[0]["type"] == "plan_started"
+        assert state.event_history[0]["run_id"] == "cap-1"
+
+    async def test_multiple_events_ordered_in_history(self):
+        state = RunState(run_id="cap-2", task="t", project_dir=".")
+        await state.event_bus.emit(EventType.PLAN_STARTED, {"task": "t"})
+        await state.event_bus.emit(EventType.PLAN_COMPLETED, {"task": "t", "plan": {}})
+        await state.event_bus.emit(EventType.EXECUTE_STARTED, {"attempt": 1, "max_attempts": 3})
+        assert [e["type"] for e in state.event_history] == [
+            "plan_started", "plan_completed", "execute_started"
+        ]
+
+    async def test_event_forwarded_to_client_queue(self):
+        state = RunState(run_id="cap-3", task="t", project_dir=".")
+        q: asyncio.Queue = asyncio.Queue()
+        state._client_queues.append(q)
+
+        await state.event_bus.emit(EventType.REVIEW_STARTED, {"attempt": 1})
+
+        assert not q.empty()
+        item = q.get_nowait()
+        assert item["type"] == "review_started"
+
+    async def test_event_forwarded_to_multiple_queues(self):
+        state = RunState(run_id="cap-4", task="t", project_dir=".")
+        q1: asyncio.Queue = asyncio.Queue()
+        q2: asyncio.Queue = asyncio.Queue()
+        state._client_queues.extend([q1, q2])
+
+        await state.event_bus.emit(EventType.PLAN_STARTED, {"task": "t"})
+
+        assert q1.get_nowait()["type"] == "plan_started"
+        assert q2.get_nowait()["type"] == "plan_started"
+
+    async def test_terminal_event_sends_sentinel_to_queue(self):
+        state = RunState(run_id="cap-5", task="t", project_dir=".")
+        q: asyncio.Queue = asyncio.Queue()
+        state._client_queues.append(q)
+
+        await state.event_bus.emit(EventType.CYCLE_APPROVED, {"task": "t", "attempt": 1})
+
+        # First item: the event itself
+        item = q.get_nowait()
+        assert item["type"] == "cycle_approved"
+        # Second item: sentinel None
+        sentinel = q.get_nowait()
+        assert sentinel is None
+
+    async def test_escalated_also_sends_sentinel(self):
+        state = RunState(run_id="cap-6", task="t", project_dir=".")
+        q: asyncio.Queue = asyncio.Queue()
+        state._client_queues.append(q)
+
+        await state.event_bus.emit(EventType.CYCLE_ESCALATED, {"task": "t", "reason": "x"})
+
+        q.get_nowait()           # the event
+        assert q.get_nowait() is None  # sentinel
+
+
+# ---------------------------------------------------------------------------
+# WebSocket endpoint
+# ---------------------------------------------------------------------------
+
+class TestWebSocketEndpoint:
+    def test_unknown_run_sends_error_json(self, client: TestClient):
+        """Connecting to a non-existent run_id gets an error message then close."""
+        # _wait_for_run has a 5 s timeout; patch it to return None immediately.
+        import orchestrator.server as srv
+        import asyncio
+
+        original = srv._wait_for_run
+
+        async def fast_none(run_id, **_kw):
+            return None
+
+        srv._wait_for_run = fast_none
+        try:
+            with client.websocket_connect("/ws/run/no-such-id") as ws:
+                msg = ws.receive_json()
+                assert msg["type"] == "error"
+                assert "not found" in msg["detail"]
+        except WebSocketDisconnect:
+            pass  # server closed after error — that's expected
+        finally:
+            srv._wait_for_run = original
+
+    def test_history_replayed_to_late_client(self, client: TestClient):
+        """Events emitted before client connects are replayed from history."""
+        state = RunState(run_id="ws-hist-1", task="t", project_dir=".", status="approved")
+        state.event_history.append({
+            "type": "plan_started", "run_id": "ws-hist-1",
+            "timestamp": "2026-01-01T00:00:00", "data": {"task": "t"},
+        })
+        _active_runs["ws-hist-1"] = state
+
+        received: list[dict] = []
+        with client.websocket_connect("/ws/run/ws-hist-1") as ws:
+            try:
+                while True:
+                    received.append(ws.receive_json())
+            except WebSocketDisconnect:
+                pass
+
+        assert any(m["type"] == "plan_started" for m in received)
+
+    def test_finished_run_sends_done_and_closes(self, client: TestClient):
+        """A completed run streams history then sends {'type': 'done'} and closes."""
+        state = RunState(run_id="ws-done-1", task="t", project_dir=".", status="approved")
+        state.event_history.append({
+            "type": "cycle_approved", "run_id": "ws-done-1",
+            "timestamp": "2026-01-01T00:00:00", "data": {},
+        })
+        _active_runs["ws-done-1"] = state
+
+        received: list[dict] = []
+        with client.websocket_connect("/ws/run/ws-done-1") as ws:
+            try:
+                while True:
+                    received.append(ws.receive_json())
+            except WebSocketDisconnect:
+                pass
+
+        types = [m["type"] for m in received]
+        assert "cycle_approved" in types
+        assert "done" in types
+
+    def test_empty_history_finished_run_just_sends_done(self, client: TestClient):
+        """A finished run with no events still sends {'type': 'done'}."""
+        state = RunState(run_id="ws-done-2", task="t", project_dir=".", status="cancelled")
+        _active_runs["ws-done-2"] = state
+
+        received: list[dict] = []
+        with client.websocket_connect("/ws/run/ws-done-2") as ws:
+            try:
+                while True:
+                    received.append(ws.receive_json())
+            except WebSocketDisconnect:
+                pass
+
+        assert received[-1]["type"] == "done"
+
+    def test_client_queue_registered_and_cleaned_up(self, client: TestClient):
+        """The per-client queue is added on connect and removed on disconnect."""
+        state = RunState(run_id="ws-q-1", task="t", project_dir=".", status="approved")
+        _active_runs["ws-q-1"] = state
+
+        assert len(state._client_queues) == 0
+        with client.websocket_connect("/ws/run/ws-q-1") as ws:
+            try:
+                while True:
+                    ws.receive_json()
+            except WebSocketDisconnect:
+                pass
+        # After disconnect, the queue must be cleaned up.
+        assert len(state._client_queues) == 0

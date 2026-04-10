@@ -23,6 +23,7 @@ GET    /api/health               Health check
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import uuid
 from dataclasses import dataclass, field
@@ -30,7 +31,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -38,7 +39,7 @@ from orchestrator import logger as log_store
 from orchestrator import orchestrator as orch
 from orchestrator import templates as tmpl
 from orchestrator.config import Config
-from orchestrator.events import EventBus
+from orchestrator.events import Event, EventBus, EventType
 from orchestrator.models import CycleRecord
 
 # ---------------------------------------------------------------------------
@@ -81,10 +82,49 @@ class RunState:
     error: str | None = None
     bg_task: asyncio.Task | None = None  # type: ignore[type-arg]
     event_bus: EventBus = field(default_factory=EventBus)
+    # Internal — not part of __init__ / repr
+    event_history: list[dict[str, Any]] = field(
+        default_factory=list, init=False, repr=False, compare=False
+    )
+    _client_queues: list[asyncio.Queue[dict[str, Any] | None]] = field(
+        default_factory=list, init=False, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        # Align the EventBus run_id so emitted events carry the same ID as the run.
+        self.event_bus.run_id = self.run_id
+        self.event_bus.subscribe(self._capture_event)
+
+    def _capture_event(self, event: Event) -> None:
+        """Persist event to history and fan-out to connected WebSocket clients."""
+        evt_dict = event.to_dict()
+        self.event_history.append(evt_dict)
+        for q in list(self._client_queues):
+            q.put_nowait(evt_dict)
+        # Terminal events: push sentinel None so WS handlers know the stream ended.
+        if event.type in (EventType.CYCLE_APPROVED, EventType.CYCLE_ESCALATED):
+            for q in list(self._client_queues):
+                q.put_nowait(None)
 
 
 # Module-level store — one server instance, in-memory is sufficient for local use.
 _active_runs: dict[str, RunState] = {}
+
+
+async def _wait_for_run(run_id: str, *, max_wait: float = 5.0) -> RunState | None:
+    """Poll _active_runs until *run_id* appears or *max_wait* seconds elapse.
+
+    Handles the race where a WebSocket client connects immediately after
+    ``POST /api/run`` returns but before the RunState is fully registered.
+    """
+    interval = 0.1
+    waited = 0.0
+    while waited < max_wait:
+        if run_id in _active_runs:
+            return _active_runs[run_id]
+        await asyncio.sleep(interval)
+        waited += interval
+    return _active_runs.get(run_id)
 
 
 # ---------------------------------------------------------------------------
@@ -469,3 +509,81 @@ async def init_project_route(req: InitRequest) -> InitResponse:
 async def health() -> dict[str, Any]:
     """Simple liveness probe."""
     return {"status": "ok", "version": "0.1.0"}
+
+
+# ---------------------------------------------------------------------------
+# WebSocket — real-time event streaming
+# ---------------------------------------------------------------------------
+
+@app.websocket("/ws/run/{run_id}")
+async def ws_run(websocket: WebSocket, run_id: str) -> None:
+    """Stream EventBus events for *run_id* to the connected client.
+
+    Protocol
+    --------
+    * Client connects.  Server accepts and immediately replays any events that
+      were emitted before the connection was established (history replay).
+    * Subsequent events are forwarded as JSON objects in real time.
+    * When the run reaches a terminal state (``cycle_approved`` or
+      ``cycle_escalated``), the server sends a final ``{"type": "done"}``
+      message and closes the connection.
+    * A ``{"type": "ping"}`` keepalive is sent every 30 s while waiting.
+    * If *run_id* is unknown after 5 s the server sends
+      ``{"type": "error", "detail": "Run not found"}`` and closes.
+
+    Multiple clients may connect to the same *run_id* simultaneously.
+    """
+    state = await _wait_for_run(run_id)
+
+    await websocket.accept()
+
+    if state is None:
+        await websocket.send_json({"type": "error", "detail": f"Run '{run_id}' not found"})
+        await websocket.close(code=4004)
+        return
+
+    # Register per-client queue THEN snapshot history.
+    # Because asyncio is single-threaded, no event can arrive between these two
+    # lines — so the snapshot captures exactly events[0..N) and the queue will
+    # receive events[N..).  No duplicates, no gaps.
+    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+    history_snapshot = list(state.event_history)
+    state._client_queues.append(queue)
+
+    try:
+        # Replay history to late-joining clients.
+        for evt in history_snapshot:
+            await websocket.send_json(evt)
+
+        # If the run already finished, drain the queue (may contain a terminal
+        # event that arrived between snapshot and queue registration) and exit.
+        if state.status != "running":
+            while not queue.empty():
+                evt = queue.get_nowait()
+                if evt is not None:
+                    await websocket.send_json(evt)
+            await websocket.send_json({"type": "done", "run_id": run_id})
+            return
+
+        # Stream live events until a sentinel (None) signals the run is over.
+        while True:
+            try:
+                evt = await asyncio.wait_for(queue.get(), timeout=30.0)
+            except asyncio.TimeoutError:
+                await websocket.send_json({"type": "ping", "run_id": run_id})
+                continue
+
+            if evt is None:
+                # Terminal event was already forwarded; just signal completion.
+                await websocket.send_json({"type": "done", "run_id": run_id})
+                break
+
+            await websocket.send_json(evt)
+
+    except Exception:  # noqa: BLE001 — client disconnect, network error, etc.
+        pass
+    finally:
+        with contextlib.suppress(ValueError):
+            state._client_queues.remove(queue)
+        with contextlib.suppress(Exception):
+            await websocket.close()
