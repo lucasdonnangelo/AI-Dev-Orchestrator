@@ -53,6 +53,8 @@ class EventType(str, Enum):
     DECISION_COMPLETED = "decision_completed"
     CYCLE_APPROVED = "cycle_approved"
     CYCLE_ESCALATED = "cycle_escalated"
+    CYCLE_PAUSED = "cycle_paused"
+    CYCLE_RESUMED = "cycle_resumed"
     TOKEN_USAGE = "token_usage"
 
 
@@ -156,3 +158,96 @@ class EventBus:
     def subscriber_count(self) -> int:
         """Number of currently registered subscribers."""
         return len(self._subscribers)
+
+
+# ---------------------------------------------------------------------------
+# PauseController
+# ---------------------------------------------------------------------------
+
+class PauseController:
+    """Pause / resume mechanism for an orchestration cycle.
+
+    The orchestrator calls :meth:`check_pause` between pipeline stages.
+    When the controller is paused (via :meth:`pause`), the call blocks
+    until :meth:`resume` is called or the 30-minute timeout expires.
+
+    Timeout raises :class:`TimeoutError` so that the background task
+    transitions to the ``"error"`` state with an informative message.
+
+    Example::
+
+        ctrl = PauseController()
+
+        # --- pause from the API layer ---
+        ctrl.pause()
+
+        # --- orchestrator blocks here until resume() is called ---
+        edited_plan = await ctrl.check_pause()   # returns None or edited plan
+
+        # --- resume (optionally with an edited plan) ---
+        ctrl.resume(edited_plan=my_plan)
+    """
+
+    #: Maximum seconds to wait in a paused state before auto-cancelling.
+    PAUSE_TIMEOUT: float = 1800.0  # 30 minutes
+
+    def __init__(self) -> None:
+        self._resume_event: asyncio.Event = asyncio.Event()
+        self._resume_event.set()   # starts as "not paused"
+        self._edited_plan: Any = None
+        self._paused: bool = False
+
+    # ------------------------------------------------------------------
+    # Public interface
+    # ------------------------------------------------------------------
+
+    @property
+    def is_paused(self) -> bool:
+        """True if the cycle is currently paused."""
+        return self._paused
+
+    def pause(self) -> None:
+        """Request a pause before the next pipeline stage.
+
+        Idempotent — calling while already paused has no effect.
+        """
+        if not self._paused:
+            self._paused = True
+            self._resume_event.clear()
+
+    def resume(self, edited_plan: Any = None) -> None:
+        """Resume the cycle, optionally supplying an edited :class:`TaskPlan`.
+
+        The plan (if any) is consumed by the next :meth:`check_pause` call
+        and applied to the ongoing cycle.
+        """
+        self._edited_plan = edited_plan
+        self._paused = False
+        self._resume_event.set()
+
+    async def check_pause(self) -> Any:
+        """Block if paused; return the edited plan (or ``None``) when resumed.
+
+        This method is called by the orchestrator between pipeline stages.
+        If the controller is not paused it returns immediately with ``None``.
+
+        Raises:
+            TimeoutError: if the run stays paused for longer than
+                :attr:`PAUSE_TIMEOUT` seconds (30 minutes by default).
+        """
+        if self._resume_event.is_set():
+            return None  # fast path — not paused
+
+        try:
+            await asyncio.wait_for(self._resume_event.wait(), timeout=self.PAUSE_TIMEOUT)
+        except asyncio.TimeoutError:
+            # Unblock the event so the controller is in a clean state.
+            self._paused = False
+            self._resume_event.set()
+            raise TimeoutError(
+                "Run auto-cancelled: remained paused for more than 30 minutes"
+            )
+
+        plan = self._edited_plan
+        self._edited_plan = None
+        return plan

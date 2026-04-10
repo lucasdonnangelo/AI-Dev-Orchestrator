@@ -13,7 +13,7 @@ from orchestrator.config import Config
 from orchestrator.models import CycleRecord, CycleStatus, DecisionResult, TaskPlan
 
 if TYPE_CHECKING:
-    from orchestrator.events import EventBus
+    from orchestrator.events import EventBus, PauseController
 
 console = Console(highlight=False)
 
@@ -23,6 +23,7 @@ async def run_cycle(
     config: Config,
     plan: TaskPlan | None = None,
     event_bus: EventBus | None = None,
+    pause_controller: PauseController | None = None,
 ) -> tuple[CycleRecord, str, DecisionResult | None]:
     """Execute a full orchestration cycle for the given task.
 
@@ -89,6 +90,14 @@ async def run_cycle(
             task, record.plan, config, session_context=session_ctx, event_bus=event_bus
         )
 
+    # Pause check #1 — after planning/critic, before first execution.
+    # This is the primary use-case for plan editing: the user can review the
+    # plan and send an edited version before the Executor starts.
+    if pause_controller is not None:
+        maybe_plan = await pause_controller.check_pause()
+        if maybe_plan is not None:
+            record.plan = maybe_plan
+
     # 4-6. Execute -> Review loop
     feedback = ""
     while record.attempt <= config.max_retries:
@@ -134,6 +143,11 @@ async def run_cycle(
                 line += f" -- Suggestion: {issue.suggestion}"
             feedback_lines.append(line)
         feedback = "\n".join(feedback_lines)
+
+        # Pause check #2 — between execution attempts (reviewer rejected).
+        # Allows the user to inspect the diff and issues before the next retry.
+        if pause_controller is not None:
+            await pause_controller.check_pause()
 
         record.attempt += 1
 

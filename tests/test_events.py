@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from orchestrator.events import Event, EventBus, EventType
+from orchestrator.events import Event, EventBus, EventType, PauseController
 
 
 # ---------------------------------------------------------------------------
@@ -44,6 +44,7 @@ class TestEventType:
         "review_started", "review_completed",
         "decision_started", "decision_completed",
         "cycle_approved", "cycle_escalated",
+        "cycle_paused", "cycle_resumed",
         "token_usage",
     ]
 
@@ -235,3 +236,107 @@ class TestEventBusRunId:
         await bus.emit(EventType.CYCLE_APPROVED)
 
         assert received[0].run_id == "test-run-42"
+
+
+# ---------------------------------------------------------------------------
+# PauseController
+# ---------------------------------------------------------------------------
+
+class TestPauseControllerInit:
+    def test_starts_not_paused(self):
+        ctrl = PauseController()
+        assert not ctrl.is_paused
+
+    def test_pause_sets_paused(self):
+        ctrl = PauseController()
+        ctrl.pause()
+        assert ctrl.is_paused
+
+    def test_resume_clears_paused(self):
+        ctrl = PauseController()
+        ctrl.pause()
+        ctrl.resume()
+        assert not ctrl.is_paused
+
+    def test_pause_is_idempotent(self):
+        ctrl = PauseController()
+        ctrl.pause()
+        ctrl.pause()  # second call should not raise
+        assert ctrl.is_paused
+
+
+class TestPauseControllerCheckPause:
+    async def test_check_pause_returns_none_when_not_paused(self):
+        ctrl = PauseController()
+        result = await ctrl.check_pause()
+        assert result is None
+
+    async def test_check_pause_blocks_until_resume(self):
+        ctrl = PauseController()
+        ctrl.pause()
+
+        async def resume_after_delay() -> None:
+            await asyncio.sleep(0.05)
+            ctrl.resume()
+
+        asyncio.create_task(resume_after_delay())
+        result = await ctrl.check_pause()
+        assert result is None
+        assert not ctrl.is_paused
+
+    async def test_check_pause_returns_edited_plan(self):
+        ctrl = PauseController()
+        ctrl.pause()
+        sentinel = object()
+
+        async def resume_with_plan() -> None:
+            await asyncio.sleep(0.05)
+            ctrl.resume(edited_plan=sentinel)
+
+        asyncio.create_task(resume_with_plan())
+        result = await ctrl.check_pause()
+        assert result is sentinel
+
+    async def test_edited_plan_consumed_after_first_check(self):
+        ctrl = PauseController()
+        sentinel = object()
+        ctrl.resume(edited_plan=sentinel)  # pre-load (not paused)
+
+        # check_pause fast-path: not paused → returns None (plan is not consumed)
+        result = await ctrl.check_pause()
+        assert result is None  # fast path, plan not consumed
+
+    async def test_edited_plan_consumed_only_once(self):
+        ctrl = PauseController()
+        ctrl.pause()
+        sentinel = object()
+
+        async def resume_task() -> None:
+            await asyncio.sleep(0.01)
+            ctrl.resume(edited_plan=sentinel)
+
+        asyncio.create_task(resume_task())
+        first = await ctrl.check_pause()
+        assert first is sentinel
+
+        # Calling again should return None (plan was consumed)
+        second = await ctrl.check_pause()
+        assert second is None
+
+    async def test_timeout_raises_timeout_error(self):
+        ctrl = PauseController()
+        ctrl.PAUSE_TIMEOUT = 0.05  # override for test speed
+        ctrl.pause()
+
+        with pytest.raises(TimeoutError, match="30 minutes"):
+            await ctrl.check_pause()
+
+    async def test_after_timeout_controller_is_not_paused(self):
+        ctrl = PauseController()
+        ctrl.PAUSE_TIMEOUT = 0.05
+        ctrl.pause()
+
+        with pytest.raises(TimeoutError):
+            await ctrl.check_pause()
+
+        assert not ctrl.is_paused

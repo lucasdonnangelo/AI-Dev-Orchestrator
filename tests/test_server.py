@@ -579,3 +579,148 @@ class TestWebSocketEndpoint:
                 pass
         # After disconnect, the queue must be cleaned up.
         assert len(state._client_queues) == 0
+
+
+# ---------------------------------------------------------------------------
+# Pause / Resume / Edit-plan endpoints
+# ---------------------------------------------------------------------------
+
+class TestPauseRun:
+    def test_pause_running_sets_paused(self, client: TestClient):
+        state = RunState(run_id="p1", task="t", project_dir=".", status="running")
+        _active_runs["p1"] = state
+
+        resp = client.post("/api/pause/p1")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "paused"
+        assert _active_runs["p1"].status == "paused"
+        assert _active_runs["p1"].pause_controller.is_paused
+
+    def test_pause_nonexistent_returns_404(self, client: TestClient):
+        resp = client.post("/api/pause/nope")
+        assert resp.status_code == 404
+
+    def test_pause_already_done_returns_current_status(self, client: TestClient):
+        state = RunState(run_id="p2", task="t", project_dir=".", status="approved")
+        _active_runs["p2"] = state
+
+        resp = client.post("/api/pause/p2")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "approved"
+
+    def test_pause_emits_cycle_paused_event(self, client: TestClient):
+        state = RunState(run_id="p3", task="t", project_dir=".", status="running")
+        _active_runs["p3"] = state
+
+        client.post("/api/pause/p3")
+
+        assert any(e["type"] == "cycle_paused" for e in state.event_history)
+
+
+class TestResumeRun:
+    def test_resume_paused_sets_running(self, client: TestClient):
+        state = RunState(run_id="r1", task="t", project_dir=".", status="paused")
+        state.pause_controller.pause()
+        _active_runs["r1"] = state
+
+        resp = client.post("/api/resume/r1")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "running"
+        assert _active_runs["r1"].status == "running"
+        assert not _active_runs["r1"].pause_controller.is_paused
+
+    def test_resume_nonexistent_returns_404(self, client: TestClient):
+        resp = client.post("/api/resume/nope")
+        assert resp.status_code == 404
+
+    def test_resume_not_paused_returns_current_status(self, client: TestClient):
+        state = RunState(run_id="r2", task="t", project_dir=".", status="running")
+        _active_runs["r2"] = state
+
+        resp = client.post("/api/resume/r2")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "running"
+
+    def test_resume_emits_cycle_resumed_event(self, client: TestClient):
+        state = RunState(run_id="r3", task="t", project_dir=".", status="paused")
+        state.pause_controller.pause()
+        _active_runs["r3"] = state
+
+        client.post("/api/resume/r3")
+
+        assert any(e["type"] == "cycle_resumed" for e in state.event_history)
+
+
+class TestEditPlan:
+    def _valid_plan_dict(self) -> dict:
+        return {
+            "description": "Updated plan",
+            "files_to_create": ["new.py"],
+            "files_to_modify": [],
+            "steps": ["step 1"],
+            "acceptance_criteria": ["it works"],
+            "estimated_complexity": "low",
+        }
+
+    def test_edit_plan_on_paused_run_resumes(self, client: TestClient):
+        state = RunState(run_id="ep1", task="t", project_dir=".", status="paused")
+        state.pause_controller.pause()
+        _active_runs["ep1"] = state
+
+        resp = client.post("/api/edit-plan/ep1", json={"plan": self._valid_plan_dict()})
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "running"
+        assert _active_runs["ep1"].status == "running"
+
+    def test_edit_plan_provides_plan_to_controller(self, client: TestClient):
+        state = RunState(run_id="ep2", task="t", project_dir=".", status="paused")
+        state.pause_controller.pause()
+        _active_runs["ep2"] = state
+
+        client.post("/api/edit-plan/ep2", json={"plan": self._valid_plan_dict()})
+
+        # The pause_controller should have an edited_plan ready
+        assert state.pause_controller._edited_plan is not None
+        assert state.pause_controller._edited_plan.description == "Updated plan"
+
+    def test_edit_plan_on_running_returns_409(self, client: TestClient):
+        state = RunState(run_id="ep3", task="t", project_dir=".", status="running")
+        _active_runs["ep3"] = state
+
+        resp = client.post("/api/edit-plan/ep3", json={"plan": self._valid_plan_dict()})
+        assert resp.status_code == 409
+
+    def test_edit_plan_nonexistent_returns_404(self, client: TestClient):
+        resp = client.post("/api/edit-plan/nope", json={"plan": self._valid_plan_dict()})
+        assert resp.status_code == 404
+
+    def test_edit_plan_invalid_payload_returns_422(self, client: TestClient):
+        state = RunState(run_id="ep4", task="t", project_dir=".", status="paused")
+        state.pause_controller.pause()
+        _active_runs["ep4"] = state
+
+        resp = client.post("/api/edit-plan/ep4", json={"plan": {"bad": "data"}})
+        assert resp.status_code == 422
+
+    def test_edit_plan_emits_cycle_resumed_with_plan_edited(self, client: TestClient):
+        state = RunState(run_id="ep5", task="t", project_dir=".", status="paused")
+        state.pause_controller.pause()
+        _active_runs["ep5"] = state
+
+        client.post("/api/edit-plan/ep5", json={"plan": self._valid_plan_dict()})
+
+        resumed_events = [e for e in state.event_history if e["type"] == "cycle_resumed"]
+        assert resumed_events
+        assert resumed_events[0]["data"].get("plan_edited") is True
+
+
+class TestRunStateHasPauseController:
+    def test_pause_controller_created_automatically(self):
+        state = RunState(run_id="x", task="t", project_dir=".")
+        assert state.pause_controller is not None
+        assert not state.pause_controller.is_paused
+
+    def test_two_states_have_different_pause_controllers(self):
+        a = RunState(run_id="a", task="t", project_dir=".")
+        b = RunState(run_id="b", task="t", project_dir=".")
+        assert a.pause_controller is not b.pause_controller
