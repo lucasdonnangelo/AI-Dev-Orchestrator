@@ -8,9 +8,19 @@
  *   tokens      — { input, output, cost }
  *   currentPlan — TaskPlan dict from PLAN_COMPLETED / CRITIC_CONSENSUS (latest)
  *   wsError     — string | null
+ *
+ * Reconnect behaviour:
+ *   If the WebSocket closes unexpectedly while runStatus is still non-terminal
+ *   (running / paused / connecting), the hook retries up to MAX_RECONNECT times
+ *   with a RECONNECT_DELAY ms pause between attempts. On each reconnect the
+ *   reducer is reset to INITIAL_STATE so that the server's history-replay
+ *   rebuilds the state cleanly without duplicates.
  */
 
 import { useEffect, useReducer, useRef } from 'react'
+
+const MAX_RECONNECT   = 5
+const RECONNECT_DELAY = 2000   // ms between reconnect attempts
 
 // ---------------------------------------------------------------------------
 // Agent definitions (order = pipeline order)
@@ -48,6 +58,18 @@ const EVENT_ROUTING = {
 }
 
 // ---------------------------------------------------------------------------
+// Initial state (declared before reducer so WS_RESET can reference it)
+// ---------------------------------------------------------------------------
+
+const INITIAL_STATE = {
+  runStatus:   'connecting',
+  agents:      initAgents(),
+  tokens:      { input: 0, output: 0, cost: 0 },
+  currentPlan: null,
+  wsError:     null,
+}
+
+// ---------------------------------------------------------------------------
 // Reducer
 // ---------------------------------------------------------------------------
 
@@ -59,6 +81,15 @@ function reducer(state, action) {
 
     case 'WS_ERROR':
       return { ...state, wsError: action.payload }
+
+    case 'WS_RECONNECTING':
+      // Keep current runStatus visible (still "running") but surface the message.
+      return { ...state, wsError: action.payload }
+
+    case 'WS_RESET':
+      // Full state reset before a reconnect so the server history-replay
+      // rebuilds everything from scratch without duplicates.
+      return INITIAL_STATE
 
     case 'WS_CLOSE':
       // Only override status if we haven't reached a terminal state.
@@ -129,48 +160,87 @@ function reducer(state, action) {
   }
 }
 
-const INITIAL_STATE = {
-  runStatus:   'connecting',
-  agents:      initAgents(),
-  tokens:      { input: 0, output: 0, cost: 0 },
-  currentPlan: null,
-  wsError:     null,
-}
-
 // ---------------------------------------------------------------------------
 // Hook
 // ---------------------------------------------------------------------------
 
+const TERMINAL_STATUSES = new Set(['approved', 'escalated', 'cancelled', 'error', 'done'])
+
 export function useRunSocket(runId) {
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE)
-  const wsRef = useRef(null)
+  const wsRef             = useRef(null)
+  // Mirrors state.runStatus so onclose callbacks see the current value
+  // without capturing a stale closure.
+  const runStatusRef      = useRef('connecting')
+  const attemptsRef       = useRef(0)
+
+  runStatusRef.current = state.runStatus
 
   useEffect(() => {
     if (!runId) return
 
-    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    // Connect directly to backend (port 8000) to avoid Vite WS proxy quirks in dev.
-    // In production (served from FastAPI), same-origin WS works naturally.
+    let cancelled = false
+    attemptsRef.current = 0
+
+    const protocol    = window.location.protocol === 'https:' ? 'wss' : 'ws'
     const backendHost = import.meta.env.DEV ? 'localhost:8000' : window.location.host
-    const url = `${protocol}://${backendHost}/ws/run/${runId}`
+    const url         = `${protocol}://${backendHost}/ws/run/${runId}`
 
-    const ws = new WebSocket(url)
-    wsRef.current = ws
+    function connect() {
+      if (cancelled) return
 
-    ws.onopen  = () => dispatch({ type: 'WS_OPEN' })
-    ws.onerror = () => dispatch({ type: 'WS_ERROR', payload: 'WebSocket connection failed' })
-    ws.onclose = () => dispatch({ type: 'WS_CLOSE' })
-    ws.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data)
-        dispatch({ type: 'EVENT', payload: msg })
-      } catch {
-        // ignore malformed frames
+      const ws = new WebSocket(url)
+      wsRef.current = ws
+
+      ws.onopen = () => {
+        attemptsRef.current = 0
+        dispatch({ type: 'WS_OPEN' })
+      }
+
+      ws.onerror = () => {
+        dispatch({ type: 'WS_ERROR', payload: 'WebSocket connection failed' })
+      }
+
+      ws.onclose = () => {
+        if (cancelled) return
+
+        // If we haven't reached a terminal state, try to reconnect.
+        if (
+          !TERMINAL_STATUSES.has(runStatusRef.current) &&
+          attemptsRef.current < MAX_RECONNECT
+        ) {
+          attemptsRef.current++
+          dispatch({
+            type:    'WS_RECONNECTING',
+            payload: `Connection lost — reconnecting… (${attemptsRef.current}/${MAX_RECONNECT})`,
+          })
+          setTimeout(() => {
+            if (!cancelled) {
+              // Reset state so the server history-replay rebuilds cleanly.
+              dispatch({ type: 'WS_RESET' })
+              connect()
+            }
+          }, RECONNECT_DELAY)
+        } else {
+          dispatch({ type: 'WS_CLOSE' })
+        }
+      }
+
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data)
+          dispatch({ type: 'EVENT', payload: msg })
+        } catch {
+          // ignore malformed frames
+        }
       }
     }
 
+    connect()
+
     return () => {
-      ws.close()
+      cancelled = true
+      wsRef.current?.close()
       wsRef.current = null
     }
   }, [runId])
