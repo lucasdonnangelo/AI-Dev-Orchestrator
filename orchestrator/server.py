@@ -31,6 +31,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -42,6 +44,18 @@ from orchestrator.config import Config
 from orchestrator.context import build_tree, detect_stack, load_readme
 from orchestrator.events import Event, EventBus, EventType, PauseController
 from orchestrator.models import CycleRecord
+
+# ---------------------------------------------------------------------------
+# Prompt paths (used by resolved-config endpoint)
+# ---------------------------------------------------------------------------
+
+_PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+_ROLE_PROMPT_PATHS: dict[str, Path] = {
+    "planner":  _PROMPTS_DIR / "planner_system.md",
+    "critic":   _PROMPTS_DIR / "critic_system.md",
+    "reviewer": _PROMPTS_DIR / "reviewer_system.md",
+    "decisor":  _PROMPTS_DIR / "decisor_system.md",
+}
 
 # ---------------------------------------------------------------------------
 # Projects registry
@@ -177,6 +191,10 @@ class EditPlanRequest(BaseModel):
 
 
 class ConfigUpdate(BaseModel):
+    content: str
+
+
+class ConfigParseRequest(BaseModel):
     content: str
 
 
@@ -559,13 +577,17 @@ async def get_project_tree(project_id: str) -> dict[str, Any]:
 
 @app.get("/api/projects/{project_id}/config")
 async def get_project_config(project_id: str) -> dict[str, Any]:
-    """Return the .orchestrator.yaml content for a project."""
+    """Return the .orchestrator.yaml content and parsed fields for a project."""
     project = _get_project_or_404(project_id)
     config_path = Path(project["path"]) / ".orchestrator.yaml"
     if not config_path.exists():
-        return {"content": "", "found": False}
+        return {"content": "", "found": False, "fields": {}}
     content = config_path.read_text(encoding="utf-8")
-    return {"content": content, "found": True}
+    try:
+        fields = yaml.safe_load(content) or {}
+    except yaml.YAMLError:
+        fields = {}
+    return {"content": content, "found": True, "fields": fields}
 
 
 @app.put("/api/projects/{project_id}/config")
@@ -575,6 +597,61 @@ async def put_project_config(project_id: str, req: ConfigUpdate) -> dict[str, An
     config_path = Path(project["path"]) / ".orchestrator.yaml"
     config_path.write_text(req.content, encoding="utf-8")
     return {"saved": True, "path": str(config_path)}
+
+
+@app.post("/api/projects/{project_id}/config-parse")
+async def parse_project_config(project_id: str, req: ConfigParseRequest) -> dict[str, Any]:
+    """Parse raw YAML text and return structured fields (no file I/O).
+
+    Used by the frontend to convert a raw YAML string into structured form
+    fields when switching from Raw to Visual editing mode.
+    """
+    _get_project_or_404(project_id)  # ensure project exists
+    try:
+        fields = yaml.safe_load(req.content) or {}
+    except yaml.YAMLError as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid YAML: {exc}")
+    if not isinstance(fields, dict):
+        raise HTTPException(status_code=422, detail="YAML root must be a mapping")
+    return {"fields": fields}
+
+
+@app.get("/api/projects/{project_id}/resolved-config")
+async def get_resolved_config(project_id: str) -> dict[str, Any]:
+    """Return the fully-resolved config for a project (all 3 layers merged).
+
+    Combines global defaults, project-level ``.orchestrator.yaml``, and
+    environment-variable overrides into a single view.  API keys are excluded.
+    The ``resolved_prompts`` field contains the actual system-prompt text each
+    agent will receive (after applying any ``prompts:`` overrides from the
+    project YAML).
+    """
+    project = _get_project_or_404(project_id)
+    try:
+        config = Config.load(project["path"])
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Failed to load config: {exc}")
+
+    resolved_prompts: dict[str, str] = {
+        role: config.load_prompt(role, path)
+        for role, path in _ROLE_PROMPT_PATHS.items()
+    }
+
+    return {
+        "planner_provider":        config.planner_provider,
+        "critic_provider":         config.critic_provider,
+        "reviewer_provider":       config.reviewer_provider,
+        "decisor_provider":        config.decisor_provider,
+        "google_model":            config.google_model,
+        "openai_model":            config.openai_model,
+        "critic_min_rounds":       config.critic_min_rounds,
+        "critic_max_rounds":       config.critic_max_rounds,
+        "max_retries":             config.max_retries,
+        "git_auto_branch":         config.git_auto_branch,
+        "git_conventional_commits": config.git_conventional_commits,
+        "prompt_overrides":        config.prompt_overrides,
+        "resolved_prompts":        resolved_prompts,
+    }
 
 
 @app.delete("/api/projects/{project_id}", status_code=204)
