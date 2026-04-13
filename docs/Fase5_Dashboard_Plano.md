@@ -2,7 +2,7 @@
 
 **Autor:** Lucas Donnangelo + Claude
 **Data:** 06/04/2026 (atualizado 13/04/2026)
-**Status:** Em andamento — 5.1, 5.2, 5.3 concluidas
+**Status:** Em andamento — 5.1, 5.2, 5.3, 5.5 concluidas; 5.4 proxima
 
 ---
 
@@ -198,29 +198,33 @@ Apos Reviewer e Decisor:
 
 ---
 
-### 5.5 Frontend — Historico e Metricas Visual
+### 5.5 Frontend — Historico e Metricas Visual [COMPLETA — commits 98b21a2..1a9e108]
 
 **Objetivo:** Dashboards bonitos com os dados que ja temos.
 
 **Tasks:**
 
-**Task 5.5.1 — Tela de Historico**
-- Tabela paginada com todas as execucoes
-- Filtros: por projeto, por status, por data
-- Clique numa execucao para ver o ciclo completo detalhado
+**Task 5.5.1 — Tela de Historico** [OK]
+- Tabela paginada (15/pagina) com colunas: Task, Status, Date, Duration, Score, Attempt, Commit
+- Filtros: status dropdown + date range (from/to) + botao Clear
+- CycleDetailModal ao clicar em qualquer linha
 
-**Task 5.5.2 — Tela de Metricas**
-- Cards com KPIs: total de runs, taxa de aprovacao, score medio, custo total
-- Grafico de linha: aprovacoes ao longo do tempo
-- Grafico de pizza: distribuicao por status
-- Grafico de barras: custo por projeto
-- Tabela: top 5 tasks mais caras
+**Task 5.5.2 — Tela de Metricas** [OK]
+- 4 KPI cards: total runs, approval rate, avg review score, avg duration
+- LineChart: runs por dia (total vs approved) — recharts
+- PieChart (donut): distribuicao por status com cores por tipo
+- BarChart: distribuicao de scores 1-10, barras coloridas por faixa
+- Tabela: top 5 runs por duracao (proxy de complexidade — logs nao persistem custo)
 
-**Task 5.5.3 — Detalhes de Ciclo**
-- Timeline visual do ciclo: Planning -> Critic (rounds) -> Execute -> Review -> Decision
-- Cada etapa expandivel com prompt, resposta, tempo, tokens
-- Diff viewer com syntax highlighting
-- Issues do reviewer com cores por severidade
+**Task 5.5.3 — Detalhes de Ciclo** [OK]
+- Timeline vertical com 5 etapas: Planning -> Critic -> Execute -> Review -> Decision
+- StepNode colorido por status: pass (verde/check), fail (vermelho/X), skip (cinza/dash)
+- Linha conectora vertical entre etapas, ultimo no sem linha
+- Planning expandivel: description, files create/modify, steps numerados, acceptance criteria
+- Critic: skip (dados nao persistidos nos logs)
+- Execute: DiffViewer colapsavel com syntax highlight (add/del/hunk/ctx)
+- Review: barra de score, summary, issues com badge severity (critical/warning/info) + file:line, suggestions
+- Decision: banner verde/vermelho, reasoning, inconsistencies
 
 ---
 
@@ -251,7 +255,7 @@ recharts           # graficos
 | 5.2 (Dashboard Base) | Tela inicial + painel de execucao em tempo real | [OK] |
 | 5.3 (Projetos) | Gestao de projetos + config visual | [OK] |
 | 5.4 (Fases) | Execucao por fases + kanban/timeline | PROXIMA |
-| 5.5 (Metricas) | Historico paginado + graficos + detalhes de ciclo | PROXIMA |
+| 5.5 (Metricas) | Historico paginado + graficos + detalhes de ciclo | [OK] |
 
 ---
 

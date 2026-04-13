@@ -1,6 +1,6 @@
 # Sessao Atual — AI Dev Orchestrator
 
-**Ultima atualizacao:** 13/04/2026
+**Ultima atualizacao:** 13/04/2026 (Fase 5.5 concluida)
 **Branch:** main
 
 ---
@@ -51,20 +51,21 @@ Voce (task)
 | 5.2 — Frontend Dashboard Base | React+Vite+Tailwind, Home, execucao em tempo real, painel plano, review | COMPLETA |
 | 5.3 — Frontend Gestao de Projetos | lista de projetos, detalhes, config visual (editor visual + preview 3 camadas) | COMPLETA |
 | 5.4 — Frontend Execucao por Fases | planejamento incremental, kanban/timeline de progresso | PROXIMA |
-| 5.5 — Frontend Historico e Metricas | graficos, diff viewer avancado, detalhes de ciclo | PROXIMA |
+| 5.5 — Frontend Historico e Metricas | graficos, diff viewer avancado, detalhes de ciclo | COMPLETA |
 
 ---
 
 ## Ultima tarefa aprovada
 
-**Tarefa:** Fase 5.3.3 — Config Visual (editor visual + preview config resolvido 3 camadas)
-**Commit:** 325f028 feat: Phase 5.3.3 - visual config editor with resolved preview and 3-layer resolution
+**Tarefa:** Fase 5.5.3 — Detalhes de Ciclo (timeline visual com etapas expandiveis e diff viewer)
+**Commit:** 1a9e108 feat: Phase 5.5.3 - cycle detail timeline with expandable steps and diff viewer
 
-**Arquivos criados/modificados na Fase 5.3.3:**
-- orchestrator/server.py — novos endpoints: GET /resolved-config, POST /config-parse; GET /config agora retorna `fields` (YAML parseado)
-- dashboard/src/pages/ProjectDetail.jsx — ConfigTab reescrito: editor visual com dropdowns/toggles/textareas + painel ResolvedPreview colapsavel
+**Arquivos criados/modificados na Fase 5.5:**
+- dashboard/src/pages/History.jsx — tabela paginada, filtros status/data, CycleDetailModal com timeline visual (5 etapas: Planning/Critic/Execute/Review/Decision), diff viewer com syntax highlighting, issues por severidade
+- dashboard/src/pages/Metrics.jsx — 4 KPI cards, LineChart (runs por dia), PieChart (status distribution), BarChart (score distribution), tabela top 5 runs por duracao; usa recharts
+- dashboard/package.json — dependencia recharts adicionada
 
-**Arquivos criados/modificados na Fase 5 (completa ate 5.3):**
+**Arquivos criados/modificados na Fase 5 (completa ate 5.5 exceto 5.4):**
 - orchestrator/events.py — EventBus pub/sub com tipos de evento por etapa
 - orchestrator/server.py — FastAPI REST + WebSocket streaming + pause/resume + endpoints de projetos/historico/metricas/templates
 - orchestrator/cli.py — comando `orchestrate dashboard`
@@ -260,8 +261,8 @@ Paginas:
   /run/:id      RunDetail -- 5 AgentCards em tempo real, PlanPanel, ReviewPanel
   /projects     Projects -- lista com stack badges, new project modal
   /projects/:id ProjectDetail -- tabs: Overview (README+tree+quick run) | Config | History
-  /history      History -- tabela paginada
-  /metrics      Metrics -- KPIs e tabela
+  /history      History -- tabela paginada com filtros + CycleDetailModal com timeline
+  /metrics      Metrics -- KPI cards + graficos recharts + top 5 runs
 
 Componentes principais:
   AgentCard     -- card por agente com status, streaming de resposta, tokens
@@ -280,6 +281,22 @@ Config Tab (5.3.3):
   troca de modo: visual->raw serializa form; raw->visual chama /config-parse
   save: Visual escreve apenas campos != default; Raw escreve conteudo literal
   ResolvedPreview: tabela de campos com badge default/project + prompts expandiveis por role
+
+History (5.5.1):
+  tabela paginada (15/pagina) com colunas: Task, Status, Date, Duration, Score, Attempt, Commit
+  filtros: status dropdown + date range + clear; counter "X / Y runs"
+  CycleDetailModal: timeline vertical com 5 etapas (Planning/Critic/Execute/Review/Decision)
+    -- cada etapa: StepNode colorido (pass/fail/skip) + linha conectora + conteudo expandivel
+    -- Execute: DiffViewer com syntax highlight (add=verde, del=vermelho, hunk=roxo)
+    -- Review: score bar + summary + issues com badge severity (critical/warning/info) + file:line
+    -- Decision: banner verde/vermelho + reasoning + inconsistencies
+
+Metrics (5.5.2):
+  4 KPI cards: total runs, approval rate (colorido), avg review score (colorido), avg duration
+  LineChart: runs por dia (total vs approved) -- recharts + dark tooltip
+  PieChart: distribuicao por status (donut) -- cores por tipo
+  BarChart: distribuicao de scores 1-10 -- barras coloridas por faixa
+  tabela: top 5 runs mais longos (task, status, duracao, score)
 ```
 
 ### Logger (`orchestrator/logger.py`)
@@ -332,12 +349,9 @@ CycleRecord    -- task, status, plan, review, decision, attempt,
    - Campo para descrever projeto inteiro, Planner quebra em fases/tasks
    - Execucao fase por fase com revisao entre cada uma
    - Timeline/kanban de progresso (fases como colunas, tasks como cards)
-
-2. **Fase 5.5 — Frontend Historico e Metricas Visual:**
-   - Graficos: aprovacoes ao longo do tempo, distribuicao por status, custo por projeto
-   - Tabela paginada com filtros por projeto/status/data
-   - Detalhes de ciclo: timeline Planning->Critic->Execute->Review->Decision
-   - Diff viewer com syntax highlighting
+   - Task 5.4.1: planejamento de fases (campo texto + "Gerar Plano de Fases" + editor de fases)
+   - Task 5.4.2: execucao controlada por fase (batch por fase, progresso, revisao entre fases)
+   - Task 5.4.3: visualizacao kanban/timeline
 
 Plano detalhado: `docs/Fase5_Dashboard_Plano.md`
 

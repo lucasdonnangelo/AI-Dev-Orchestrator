@@ -51,38 +51,38 @@ Voce (task)
 
 175 testes passando. 6/6 tasks do batch cobaia aprovadas. Sistema validado end-to-end.
 
-### [>>] Fase 5 — Dashboard Visual (PROXIMA)
+### [>>] Fase 5 — Dashboard Visual (EM ANDAMENTO — 5.4 pendente)
 
 Plano detalhado em: `docs/Fase5_Dashboard_Plano.md`
 
-#### 5.1 Backend API e WebSocket
+#### [OK] 5.1 Backend API e WebSocket
 - `orchestrator/events.py` — EventBus pub/sub com tipos de evento por etapa
 - `orchestrator/server.py` — FastAPI com REST + WebSocket
 - Endpoints: /api/run, /api/batch, /api/cancel, /api/pause, /api/resume, /api/projects, /api/history, /api/metrics
 - WS /ws/run/{run_id} — streaming de eventos tempo real
 - Comando `orchestrate dashboard` no cli.py
 
-#### 5.2 Frontend — Dashboard Base
+#### [OK] 5.2 Frontend — Dashboard Base
 - React + Vite + Tailwind em `dashboard/`
 - Tela inicial: campo de task, selecao de projeto, botao executar
 - Painel de execucao: 5 cards com status de cada agente em tempo real
 - Controles: pausar, cancelar, editar plano
 - Monitor de tokens e custo
 
-#### 5.3 Frontend — Gestao de Projetos
+#### [OK] 5.3 Frontend — Gestao de Projetos
 - Lista de projetos registrados com stack, historico
 - Novo projeto via wizard com templates
-- Config visual do .orchestrator.yaml
+- Config visual do .orchestrator.yaml (editor visual + preview 3 camadas)
 
-#### 5.4 Frontend — Execucao por Fases
+#### [>>] 5.4 Frontend — Execucao por Fases (PROXIMA)
 - Descrever projeto inteiro, Planner quebra em fases/tasks
 - Executar fase por fase com revisao entre cada uma
 - Timeline/kanban de progresso
 
-#### 5.5 Frontend — Historico e Metricas Visual
-- Graficos de aprovacao, custos, tempo
-- Diff viewer com syntax highlighting
-- Detalhes expandiveis de cada ciclo
+#### [OK] 5.5 Frontend — Historico e Metricas Visual
+- History: tabela paginada, filtros status/data, CycleDetailModal com timeline visual
+- Metrics: 4 KPI cards, LineChart/PieChart/BarChart (recharts), tabela top 5 runs
+- Timeline de ciclo: 5 etapas (Planning/Critic/Execute/Review/Decision) com StepNode colorido
 
 ## Estrutura do Projeto
 
@@ -105,8 +105,8 @@ ai-dev-orchestrator/
 │   ├── metrics.py            # [OK] Analytics
 │   ├── session.py            # [OK] SESSAO_ATUAL.md automatizado
 │   ├── templates.py          # [OK] Templates de projeto
-│   ├── events.py             # [FASE 5.1] EventBus
-│   ├── server.py             # [FASE 5.1] FastAPI backend
+│   ├── events.py             # [OK] EventBus
+│   ├── server.py             # [OK] FastAPI backend
 │   ├── providers/
 │   │   ├── __init__.py       # [OK] Factory + plugin registry
 │   │   ├── base.py           # [OK] BaseAgent
@@ -115,7 +115,7 @@ ai-dev-orchestrator/
 │   │   ├── openai.py         # [OK] OpenAIProvider
 │   │   └── retry.py          # [OK] Retry com backoff
 │   └── prompts/              # [OK] System prompts (6 arquivos)
-├── dashboard/                # [FASE 5.2] React + Vite
+├── dashboard/                # [OK] React + Vite (5.2–5.5)
 ├── configs/
 ├── logs/
 ├── docs/
