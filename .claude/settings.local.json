@@ -19,7 +19,8 @@
       "Bash(python -c \"from orchestrator.config import Config; c = Config.load\\('.'\\); errs = c.validate\\(\\); print\\('Errors:', errs\\); print\\('Anthropic key set:', bool\\(c.api_key\\)\\); print\\('Google key set:', bool\\(c.google_api_key\\)\\)\")",
       "Bash(python -m orchestrator.cli run \"Criar uma funcao divide\\(a, b\\) que retorna a divisao de dois numeros, com protecao contra divisao por zero\" -d cobaia -y)",
       "Bash(python -m pytest tests/ -v -x -q)",
-      "Bash(python -m pytest tests/test_events.py -v)"
+      "Bash(python -m pytest tests/test_events.py -v)",
+      "Bash(npm run:*)"
     ]
   }
 }
