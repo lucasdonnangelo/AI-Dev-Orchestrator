@@ -1,6 +1,6 @@
 # Sessao Atual — AI Dev Orchestrator
 
-**Ultima atualizacao:** 13/04/2026 (Fase 5.5 concluida)
+**Ultima atualizacao:** 13/04/2026 (Fase 5 concluida — iniciando Fase 6)
 **Branch:** main
 
 ---
@@ -14,7 +14,7 @@ Voce (task)
   --> Critico (Gemini) avalia [min 2, max 5 rounds]  [recebe session_context]
         se nao consenso: Planner refina --> Critico reavalia
   --> Plano Final
-  --> Executor (Claude Agent SDK) implementa
+  --> Executor (Claude Agent SDK) implementa      [roda em thread separada via asyncio.to_thread]
         se reprovado (max 3x): Executor corrige com feedback
   --> Reviewer (Gemini) avalia codigo             [recebe session_context]
   --> Decisor (Gemini) valida coerencia com plano [recebe session_context]
@@ -50,30 +50,39 @@ Voce (task)
 | 5.1 — Backend API e WebSocket | EventBus, FastAPI REST, WebSocket streaming, pause/resume, CLI dashboard | COMPLETA |
 | 5.2 — Frontend Dashboard Base | React+Vite+Tailwind, Home, execucao em tempo real, painel plano, review | COMPLETA |
 | 5.3 — Frontend Gestao de Projetos | lista de projetos, detalhes, config visual (editor visual + preview 3 camadas) | COMPLETA |
-| 5.4 — Frontend Execucao por Fases | planejamento incremental, kanban/timeline de progresso | PROXIMA |
+| 5.4 — Frontend Execucao por Fases | planejamento incremental, kanban/timeline de progresso | PULADA (intencional) |
 | 5.5 — Frontend Historico e Metricas | graficos, diff viewer avancado, detalhes de ciclo | COMPLETA |
+| 6 — Orquestracao por Plano Hierarquico | PLANO.md estruturado, execucao autonoma fase a fase, retomada de progresso | PROXIMA |
 
 ---
 
 ## Ultima tarefa aprovada
 
-**Tarefa:** Fase 5.5.3 — Detalhes de Ciclo (timeline visual com etapas expandiveis e diff viewer)
-**Commit:** 1a9e108 feat: Phase 5.5.3 - cycle detail timeline with expandable steps and diff viewer
+**Tarefa:** Fase 5 concluida + correcoes de infraestrutura pos-5.5
+**Commits relevantes:**
+- `1a9e108` feat: Phase 5.5.3 - cycle detail timeline with expandable steps and diff viewer
+- `90dcf75` feat: WebSocket auto-reconnect (5x/2s) with state reset on unexpected close
+- `8877091` fix: retry defaults 5x/60s, emit cycle_escalated on bg error, revert vite proxy to 8000
+- `20f2b7b` fix: run claude-agent-sdk in thread pool to unblock FastAPI event loop during execution
+- `eac30aa` feat: Teste aplicado em cobaia bem sucedido. Adiciona arquivo do plano para a fase 6.
 
-**Arquivos criados/modificados na Fase 5.5:**
-- dashboard/src/pages/History.jsx — tabela paginada, filtros status/data, CycleDetailModal com timeline visual (5 etapas: Planning/Critic/Execute/Review/Decision), diff viewer com syntax highlighting, issues por severidade
-- dashboard/src/pages/Metrics.jsx — 4 KPI cards, LineChart (runs por dia), PieChart (status distribution), BarChart (score distribution), tabela top 5 runs por duracao; usa recharts
-- dashboard/package.json — dependencia recharts adicionada
+**Correcoes aplicadas apos conclusao da Fase 5:**
+- WebSocket auto-reconexao: 5 tentativas com backoff de 2s, reset de estado em fechamento inesperado
+- Event loop fix: executor (claude-agent-sdk) agora roda via `asyncio.to_thread(_run_query_sync, ...)` — event loop principal do FastAPI livre para processar WS durante execucao do Executor
+- Modelo Gemini alterado: `gemini-2.5-flash` -> `gemini-2.5-flash-lite` (Critico, Reviewer, Decisor)
+- 5.4 pulada intencionalmente — funcionalidade coberta pelo escopo da Fase 6
 
-**Arquivos criados/modificados na Fase 5 (completa ate 5.5 exceto 5.4):**
+**Arquivos criados/modificados relevantes (Fase 5 completa):**
 - orchestrator/events.py — EventBus pub/sub com tipos de evento por etapa
-- orchestrator/server.py — FastAPI REST + WebSocket streaming + pause/resume + endpoints de projetos/historico/metricas/templates
+- orchestrator/server.py — FastAPI REST + WebSocket streaming + pause/resume + endpoints completos
+- orchestrator/executor.py — _run_query_sync + asyncio.to_thread para nao bloquear event loop
 - orchestrator/cli.py — comando `orchestrate dashboard`
 - dashboard/ — projeto React+Vite+Tailwind completo
   - src/App.jsx, src/main.jsx — roteamento React Router
   - src/components/ — Layout, Sidebar, Header, AgentCard, RunControls, PlanPanel, ReviewPanel, NewProjectModal
   - src/pages/ — Home, RunDetail, Projects, ProjectDetail, History, Metrics
-  - src/hooks/ — useRunSocket.js (WebSocket), useApi.js
+  - src/hooks/ — useRunSocket.js (WebSocket com reconexao automatica), useApi.js
+- docs/Fase6_Plano_Hierarquico.md — plano detalhado da Fase 6
 
 ---
 
@@ -103,7 +112,7 @@ Plugin registry: register_provider(name, cls) para providers externos em runtime
 |--------|---------|----------------------|------------------------|--------------------|
 | Planner | `planner.py` | `config.planner_provider` (default: anthropic) | sim | sim |
 | Critico | `critic.py` | `config.critic_provider` (default: google) | sim | nao |
-| Executor | `executor.py` | sempre Claude Agent SDK | nao | nao |
+| Executor | `executor.py` | sempre Claude Agent SDK (thread pool) | nao | nao |
 | Reviewer | `reviewer.py` | `config.reviewer_provider` (default: google) | sim | nao |
 | Decisor | `decisor.py` | `config.decisor_provider` (default: google) | sim | nao |
 
@@ -200,6 +209,8 @@ orchestrate metrics [--log-dir logs]
 
 orchestrate history [-n 20] [--log-dir logs]
 orchestrate status [--log-dir logs]
+orchestrate dashboard
+  -- sobe FastAPI (localhost:8000) + frontend (localhost:3000)
 ```
 
 ### Stage messages (orchestrator.py)
@@ -245,9 +256,11 @@ Endpoints REST:
 
 WebSocket:
   WS /ws/run/{run_id}  -- streaming de eventos + history replay + keepalive 30s
+                          reconexao automatica no frontend (5x / backoff 2s)
 
 Projetos registrados: ~/.orchestrator/projects.json
 RunState: in-memory, suporta multiplos clients WS por run
+Executor: roda em asyncio.to_thread (nao bloqueia event loop do FastAPI)
 ```
 
 ### Dashboard — Frontend (`dashboard/`)
@@ -272,7 +285,7 @@ Componentes principais:
   NewProjectModal -- wizard: nome + path + template
 
 Hooks:
-  useRunSocket(runId) -- WebSocket com history replay e reconexao
+  useRunSocket(runId) -- WebSocket com history replay e reconexao automatica (5x/2s)
   api.get/post/put/delete -- fetch wrapper com base URL :8000
 
 Config Tab (5.3.3):
@@ -319,7 +332,7 @@ CRITIC_PROVIDER=google
 REVIEWER_PROVIDER=google
 DECISOR_PROVIDER=google
 
-GOOGLE_MODEL=gemini-2.5-flash
+GOOGLE_MODEL=gemini-2.5-flash-lite
 CRITIC_MIN_ROUNDS=2
 CRITIC_MAX_ROUNDS=5
 ORCHESTRATOR_MAX_RETRIES=3
@@ -345,15 +358,15 @@ CycleRecord    -- task, status, plan, review, decision, attempt,
 
 ## Proximos passos imediatos
 
-1. **Fase 5.4 — Frontend Execucao por Fases:**
-   - Campo para descrever projeto inteiro, Planner quebra em fases/tasks
-   - Execucao fase por fase com revisao entre cada uma
-   - Timeline/kanban de progresso (fases como colunas, tasks como cards)
-   - Task 5.4.1: planejamento de fases (campo texto + "Gerar Plano de Fases" + editor de fases)
-   - Task 5.4.2: execucao controlada por fase (batch por fase, progresso, revisao entre fases)
-   - Task 5.4.3: visualizacao kanban/timeline
+1. **Fase 6 — Orquestracao por Plano Hierarquico:**
+   - Ler PLANO.md estruturado em fases/subfases/tasks (formato Markdown com checkboxes)
+   - Executar cada task pelo ciclo completo de agentes autonomamente
+   - Marcar progresso ([x]) no PLANO.md apos cada task aprovada
+   - Parar para validacao humana ao fim de cada fase/subfase
+   - Retomar de onde parou se interrompido (parse de [x] vs [ ])
+   - Manter contexto acumulado entre tasks da mesma fase
 
-Plano detalhado: `docs/Fase5_Dashboard_Plano.md`
+Plano detalhado: `docs/Fase6_Plano_Hierarquico.md`
 
 ---
 
@@ -383,6 +396,9 @@ python -m orchestrator.cli status
 
 # Ver historico
 python -m orchestrator.cli history -n 10
+
+# Iniciar dashboard web
+python -m orchestrator.cli dashboard
 
 # Rodar testes unitarios
 pytest tests/ -v
