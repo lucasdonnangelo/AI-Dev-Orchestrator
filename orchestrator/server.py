@@ -39,7 +39,7 @@ from orchestrator import logger as log_store
 from orchestrator import orchestrator as orch
 from orchestrator import templates as tmpl
 from orchestrator.config import Config
-from orchestrator.context import detect_stack
+from orchestrator.context import build_tree, detect_stack, load_readme
 from orchestrator.events import Event, EventBus, EventType, PauseController
 from orchestrator.models import CycleRecord
 
@@ -174,6 +174,10 @@ class InitResponse(BaseModel):
 
 class EditPlanRequest(BaseModel):
     plan: dict[str, Any]  # Serialized TaskPlan (keys: description, steps, …)
+
+
+class ConfigUpdate(BaseModel):
+    content: str
 
 
 # ---------------------------------------------------------------------------
@@ -513,19 +517,64 @@ async def create_project(req: ProjectCreate) -> dict[str, Any]:
     return entry
 
 
-@app.get("/api/projects/{project_id}/info")
-async def get_project_info(project_id: str) -> dict[str, Any]:
-    """Return stack detection and path existence for a project."""
+def _get_project_or_404(project_id: str) -> dict[str, Any]:
+    """Return the project dict for *project_id* or raise HTTP 404."""
     projects = _load_projects()
     project = next((p for p in projects if p.get("id") == project_id), None)
     if project is None:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+    return project
 
+
+@app.get("/api/projects/{project_id}/info")
+async def get_project_info(project_id: str) -> dict[str, Any]:
+    """Return stack detection and path existence for a project."""
+    project = _get_project_or_404(project_id)
     path = Path(project["path"])
     if not path.exists():
         return {"id": project_id, "stack": [], "path_exists": False}
-
     return {"id": project_id, "stack": detect_stack(path), "path_exists": True}
+
+
+@app.get("/api/projects/{project_id}/readme")
+async def get_project_readme(project_id: str) -> dict[str, Any]:
+    """Return the README content for a project (raw text, empty string if not found)."""
+    project = _get_project_or_404(project_id)
+    path = Path(project["path"])
+    if not path.exists():
+        return {"content": "", "found": False}
+    content = load_readme(path)
+    return {"content": content, "found": bool(content)}
+
+
+@app.get("/api/projects/{project_id}/tree")
+async def get_project_tree(project_id: str) -> dict[str, Any]:
+    """Return the directory tree string for a project (plain text, no markdown wrapper)."""
+    project = _get_project_or_404(project_id)
+    path = Path(project["path"])
+    if not path.exists():
+        return {"content": ""}
+    return {"content": build_tree(path)}
+
+
+@app.get("/api/projects/{project_id}/config")
+async def get_project_config(project_id: str) -> dict[str, Any]:
+    """Return the .orchestrator.yaml content for a project."""
+    project = _get_project_or_404(project_id)
+    config_path = Path(project["path"]) / ".orchestrator.yaml"
+    if not config_path.exists():
+        return {"content": "", "found": False}
+    content = config_path.read_text(encoding="utf-8")
+    return {"content": content, "found": True}
+
+
+@app.put("/api/projects/{project_id}/config")
+async def put_project_config(project_id: str, req: ConfigUpdate) -> dict[str, Any]:
+    """Write *req.content* to the .orchestrator.yaml of a project."""
+    project = _get_project_or_404(project_id)
+    config_path = Path(project["path"]) / ".orchestrator.yaml"
+    config_path.write_text(req.content, encoding="utf-8")
+    return {"saved": True, "path": str(config_path)}
 
 
 @app.delete("/api/projects/{project_id}", status_code=204)

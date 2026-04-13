@@ -125,6 +125,38 @@ def detect_stack(project_dir: str | Path) -> list[str]:
     return _detect_stack(Path(project_dir).resolve())
 
 
+def load_readme(project_dir: str | Path) -> str:
+    """Return the raw README content for *project_dir*, capped at _README_MAX_CHARS.
+
+    Returns an empty string if no README is found.
+    """
+    root = Path(project_dir).resolve()
+    for name in ["README.md", "README.rst", "README.txt", "README"]:
+        path = root / name
+        if path.exists():
+            content = path.read_text(encoding="utf-8", errors="replace")
+            if len(content) > _README_MAX_CHARS:
+                content = content[:_README_MAX_CHARS] + "\n... [truncated]"
+            return content
+    return ""
+
+
+def build_tree(project_dir: str | Path) -> str:
+    """Return a compact directory tree string for *project_dir* (no markdown wrapper).
+
+    Delegates to :func:`_build_tree` and strips the markdown header/code-fence
+    so callers receive plain text suitable for display in a ``<pre>`` block.
+    """
+    root = Path(project_dir).resolve()
+    md = _build_tree(root)
+    # _build_tree wraps the tree in a ``` fenced block — extract only the tree text.
+    start = md.find("```\n")
+    end = md.rfind("\n```")
+    if start != -1 and end != -1:
+        return md[start + 4 : end]
+    return md
+
+
 def load_project_context(project_dir: str | Path) -> str:
     """Load README + directory tree + stack detection for a project.
 
