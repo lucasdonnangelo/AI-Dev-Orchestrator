@@ -3,6 +3,7 @@ import Layout from '../components/Layout'
 import Header from '../components/Header'
 import AgentCard from '../components/AgentCard'
 import RunControls from '../components/RunControls'
+import PlanPanel from '../components/PlanPanel'
 import { useRunSocket, AGENTS } from '../hooks/useRunSocket'
 
 // ---------------------------------------------------------------------------
@@ -145,6 +146,14 @@ export default function RunDetail() {
             />
           ))}
         </div>
+
+        {/* Plan panel — shown once a plan exists */}
+        <PlanPanel
+          plan={currentPlan}
+          criticEvents={agents.critic?.events ?? []}
+          runId={runId}
+          runStatus={runStatus}
+        />
 
         {/* Token counter */}
         <TokenCounter tokens={tokens} />
