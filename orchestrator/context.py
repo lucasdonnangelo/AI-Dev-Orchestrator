@@ -117,6 +117,14 @@ def _build_tree(project_dir: Path) -> str:
 # Public API
 # ---------------------------------------------------------------------------
 
+def detect_stack(project_dir: str | Path) -> list[str]:
+    """Return the detected tech stacks for *project_dir* (public API).
+
+    Delegates to :func:`_detect_stack` after resolving the path.
+    """
+    return _detect_stack(Path(project_dir).resolve())
+
+
 def load_project_context(project_dir: str | Path) -> str:
     """Load README + directory tree + stack detection for a project.
 

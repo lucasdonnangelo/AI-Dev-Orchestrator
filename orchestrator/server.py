@@ -39,6 +39,7 @@ from orchestrator import logger as log_store
 from orchestrator import orchestrator as orch
 from orchestrator import templates as tmpl
 from orchestrator.config import Config
+from orchestrator.context import detect_stack
 from orchestrator.events import Event, EventBus, EventType, PauseController
 from orchestrator.models import CycleRecord
 
@@ -510,6 +511,21 @@ async def create_project(req: ProjectCreate) -> dict[str, Any]:
     projects.append(entry)
     _save_projects(projects)
     return entry
+
+
+@app.get("/api/projects/{project_id}/info")
+async def get_project_info(project_id: str) -> dict[str, Any]:
+    """Return stack detection and path existence for a project."""
+    projects = _load_projects()
+    project = next((p for p in projects if p.get("id") == project_id), None)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+
+    path = Path(project["path"])
+    if not path.exists():
+        return {"id": project_id, "stack": [], "path_exists": False}
+
+    return {"id": project_id, "stack": detect_stack(path), "path_exists": True}
 
 
 @app.delete("/api/projects/{project_id}", status_code=204)

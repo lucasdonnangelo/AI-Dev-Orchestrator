@@ -20,7 +20,9 @@
       "Bash(python -m orchestrator.cli run \"Criar uma funcao divide\\(a, b\\) que retorna a divisao de dois numeros, com protecao contra divisao por zero\" -d cobaia -y)",
       "Bash(python -m pytest tests/ -v -x -q)",
       "Bash(python -m pytest tests/test_events.py -v)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(curl -s -X POST http://localhost:8000/api/projects -H 'Content-Type: application/json' -d '{\"name\":\"ai-dev-orchestrator\",\"path\":\"C:/Users/lucas/OneDrive/Desktop/ai_dev_orchestrator\"}')",
+      "Bash(curl -s \"http://localhost:8000/api/projects/6e6773b2-d4e8-462c-a70b-07f2d421d5e7/info\")"
     ]
   }
 }
