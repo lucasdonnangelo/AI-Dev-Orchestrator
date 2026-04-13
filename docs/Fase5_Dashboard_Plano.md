@@ -1,8 +1,8 @@
 # AI Dev Orchestrator — Fase 5: Dashboard Visual
 
 **Autor:** Lucas Donnangelo + Claude
-**Data:** 06/04/2026
-**Status:** Planejamento
+**Data:** 06/04/2026 (atualizado 13/04/2026)
+**Status:** Em andamento — 5.1, 5.2, 5.3 concluidas
 
 ---
 
@@ -51,20 +51,20 @@ Projetos-alvo (FinanceAI, cobaia, etc.)
 
 ## Sub-fases
 
-### 5.1 Backend API e WebSocket
+### 5.1 Backend API e WebSocket [COMPLETA — commit f364af7..76bdf84]
 
 **Objetivo:** Expor o orchestrator como servico local com streaming de eventos.
 
 **Tasks:**
 
-**Task 5.1.1 — Event System**
+**Task 5.1.1 — Event System** [OK]
 Criar `orchestrator/events.py` com um sistema de eventos pub/sub:
 - Classe `EventBus` com metodos `emit(event_type, data)` e `subscribe(callback)`
 - Tipos de evento: `plan_started`, `plan_completed`, `critic_round`, `critic_consensus`, `execute_started`, `execute_completed`, `review_started`, `review_completed`, `decision_started`, `decision_completed`, `cycle_approved`, `cycle_escalated`, `token_usage`
 - Cada evento carrega: timestamp, tipo, dados relevantes (prompt enviado, resposta recebida, score, etc.)
 - Integrar no `orchestrator.py`: emitir eventos em cada etapa do ciclo
 
-**Task 5.1.2 — FastAPI Server**
+**Task 5.1.2 — FastAPI Server** [OK]
 Criar `orchestrator/server.py` com:
 - `POST /api/run` — inicia um ciclo (recebe task + project_dir), retorna run_id
 - `POST /api/batch` — inicia batch (recebe lista de tasks + project_dir), retorna batch_id
@@ -77,14 +77,14 @@ Criar `orchestrator/server.py` com:
 - `GET /api/templates` — lista templates disponiveis
 - `POST /api/init` — cria projeto a partir de template
 
-**Task 5.1.3 — WebSocket Streaming**
+**Task 5.1.3 — WebSocket Streaming** [OK]
 Adicionar endpoint WebSocket em `orchestrator/server.py`:
 - `WS /ws/run/{run_id}` — stream de eventos em tempo real para um ciclo
 - Cada evento do EventBus e enviado como JSON pro WebSocket
 - Suporte a multiplos clients conectados no mesmo run
 - Eventos incluem: o que o agente esta fazendo, prompt enviado, resposta (streaming), tokens consumidos, custo estimado
 
-**Task 5.1.4 — Controle de Execucao**
+**Task 5.1.4 — Controle de Execucao** [OK]
 Adicionar mecanismo de pausa/resume no orchestrator:
 - Flag `paused` no ciclo que checa entre cada etapa
 - `POST /api/pause/{run_id}` — pausa antes da proxima etapa
@@ -92,7 +92,7 @@ Adicionar mecanismo de pausa/resume no orchestrator:
 - `POST /api/edit-plan/{run_id}` — recebe plano editado e retoma com ele
 - Timeout de 30 minutos em pausa antes de cancelar automaticamente
 
-**Task 5.1.5 — Comando CLI**
+**Task 5.1.5 — Comando CLI** [OK]
 Adicionar comando `orchestrate dashboard` ao cli.py:
 - Inicia o servidor FastAPI em localhost:8000
 - Inicia o servidor de frontend (se build existir) em localhost:3000
@@ -103,27 +103,27 @@ Adicionar comando `orchestrate dashboard` ao cli.py:
 
 ---
 
-### 5.2 Frontend — Dashboard Base
+### 5.2 Frontend — Dashboard Base [COMPLETA — commits 00ec9f3..f4c03fe]
 
 **Objetivo:** Interface funcional para executar tasks e ver resultados.
 
 **Tasks:**
 
-**Task 5.2.1 — Setup React + Vite**
+**Task 5.2.1 — Setup React + Vite** [OK]
 Criar pasta `dashboard/` na raiz do projeto:
 - `npm create vite@latest dashboard -- --template react`
 - Instalar Tailwind CSS
 - Configurar proxy para localhost:8000
 - Componentes base: Layout, Sidebar, Header
 
-**Task 5.2.2 — Tela Inicial (Home)**
+**Task 5.2.2 — Tela Inicial (Home)** [OK]
 - Campo de texto grande para descrever a task
 - Dropdown para selecionar projeto (carregado de `/api/projects`)
 - Botao "Novo Projeto" que abre modal com templates
 - Botao "Executar" que chama `POST /api/run`
 - Lista das ultimas 5 execucoes com status
 
-**Task 5.2.3 — Painel de Execucao em Tempo Real**
+**Task 5.2.3 — Painel de Execucao em Tempo Real** [OK]
 A tela principal quando um ciclo esta rodando:
 - 5 cards horizontais: Planner | Critico | Executor | Reviewer | Decisor
 - Card ativo (etapa atual) com borda colorida e animacao de loading
@@ -132,13 +132,13 @@ A tela principal quando um ciclo esta rodando:
 - Contador de tokens e custo estimado (atualizado em tempo real)
 - Botoes: Pausar | Cancelar | Editar Plano (disponivel quando pausado)
 
-**Task 5.2.4 — Painel do Plano**
+**Task 5.2.4 — Painel do Plano** [OK]
 Quando o Planner gera o plano e o Critico termina:
 - Exibir o plano formatado: steps, files, acceptance criteria, complexidade
 - Historico dos rounds do Critico (score por round, observacoes)
 - Se pausado: editor JSON inline para modificar o plano antes de executar
 
-**Task 5.2.5 — Painel de Review e Decision**
+**Task 5.2.5 — Painel de Review e Decision** [OK]
 Apos Reviewer e Decisor:
 - Diff viewer com syntax highlighting (estilo GitHub)
 - Score do review com issues coloridas por severidade
@@ -147,25 +147,25 @@ Apos Reviewer e Decisor:
 
 ---
 
-### 5.3 Frontend — Gestao de Projetos
+### 5.3 Frontend — Gestao de Projetos [COMPLETA — commits bbc4ffb..325f028]
 
 **Objetivo:** Gerenciar multiplos projetos sem sair da interface.
 
 **Tasks:**
 
-**Task 5.3.1 — Tela de Projetos**
+**Task 5.3.1 — Tela de Projetos** [OK]
 - Lista de projetos registrados com: nome, path, stack detectada, ultima execucao
 - Botao "Adicionar Projeto Existente" — file picker para selecionar pasta
 - Botao "Novo Projeto" — wizard: nome -> template -> path -> criar
 - Cada projeto clicavel para ver detalhes
 
-**Task 5.3.2 — Detalhes do Projeto**
+**Task 5.3.2 — Detalhes do Projeto** [OK]
 - Info: stack, README preview, estrutura de pastas (tree)
 - Config: `.orchestrator.yaml` editavel inline
 - Historico: tabela de todas as execucoes nesse projeto
 - Atalho: campo de task + botao executar (pre-selecionado nesse projeto)
 
-**Task 5.3.3 — Configuracao Visual**
+**Task 5.3.3 — Configuracao Visual** [OK — commit 325f028]
 - Editor visual do `.orchestrator.yaml`: dropdowns para provider, model, campos de texto para prompts customizados
 - Preview do system prompt resultante (3 camadas resolvidas)
 - Salvar grava no `.orchestrator.yaml` do projeto
@@ -245,12 +245,13 @@ recharts           # graficos
 
 ## Cronograma Estimado
 
-| Semana | Sub-fase | Entregavel |
-|--------|----------|-----------|
-| 1 | 5.1 (Backend) | API REST + WebSocket + Event System |
-| 2 | 5.2 (Dashboard Base) | Tela inicial + painel de execucao em tempo real |
-| 3 | 5.3 (Projetos) | Gestao de projetos + config visual |
-| 4 | 5.4 + 5.5 (Fases + Metricas) | Execucao por fases + dashboards |
+| Sub-fase | Entregavel | Status |
+|----------|-----------|--------|
+| 5.1 (Backend) | API REST + WebSocket + Event System | [OK] |
+| 5.2 (Dashboard Base) | Tela inicial + painel de execucao em tempo real | [OK] |
+| 5.3 (Projetos) | Gestao de projetos + config visual | [OK] |
+| 5.4 (Fases) | Execucao por fases + kanban/timeline | PROXIMA |
+| 5.5 (Metricas) | Historico paginado + graficos + detalhes de ciclo | PROXIMA |
 
 ---
 

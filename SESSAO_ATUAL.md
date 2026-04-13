@@ -1,6 +1,6 @@
 # Sessao Atual — AI Dev Orchestrator
 
-**Ultima atualizacao:** 10/04/2026
+**Ultima atualizacao:** 13/04/2026
 **Branch:** main
 
 ---
@@ -47,21 +47,32 @@ Voce (task)
 | 4.2 — Prompts Customizaveis | override de system prompts via .orchestrator.yaml, 3-layer resolution | COMPLETA |
 | 4.3 — Plugin de Providers | registro dinamico de providers em runtime via config | COMPLETA |
 | 4.4 — Modo Interativo | chat REPL com agentes, editar plano/codigo pos-escalacao, retry/edit | COMPLETA |
-| 5 — Dashboard Visual | FastAPI backend + React frontend + WebSocket streaming | PROXIMA |
+| 5.1 — Backend API e WebSocket | EventBus, FastAPI REST, WebSocket streaming, pause/resume, CLI dashboard | COMPLETA |
+| 5.2 — Frontend Dashboard Base | React+Vite+Tailwind, Home, execucao em tempo real, painel plano, review | COMPLETA |
+| 5.3 — Frontend Gestao de Projetos | lista de projetos, detalhes, config visual (editor visual + preview 3 camadas) | COMPLETA |
+| 5.4 — Frontend Execucao por Fases | planejamento incremental, kanban/timeline de progresso | PROXIMA |
+| 5.5 — Frontend Historico e Metricas | graficos, diff viewer avancado, detalhes de ciclo | PROXIMA |
 
 ---
 
 ## Ultima tarefa aprovada
 
-**Tarefa:** Fase 4.4 — Modo Interativo (chat REPL, post-escalation retry/edit)
-**Commit:** 29c6938 feat: Phase 4.4 - interactive mode with chat REPL, post-escalation retry/edit
+**Tarefa:** Fase 5.3.3 — Config Visual (editor visual + preview config resolvido 3 camadas)
+**Commit:** 325f028 feat: Phase 5.3.3 - visual config editor with resolved preview and 3-layer resolution
 
-**Arquivos criados/modificados na Fase 4:**
-- orchestrator/templates.py — templates FastAPI, Python CLI, React
-- orchestrator/chat.py — REPL interativo e single-turn com agentes
-- orchestrator/config.py — suporte a 3-layer resolution de prompts
-- orchestrator/providers/__init__.py — plugin registry + registro dinamico
-- orchestrator/cli.py — comandos init, chat; modo interativo pos-escalacao
+**Arquivos criados/modificados na Fase 5.3.3:**
+- orchestrator/server.py — novos endpoints: GET /resolved-config, POST /config-parse; GET /config agora retorna `fields` (YAML parseado)
+- dashboard/src/pages/ProjectDetail.jsx — ConfigTab reescrito: editor visual com dropdowns/toggles/textareas + painel ResolvedPreview colapsavel
+
+**Arquivos criados/modificados na Fase 5 (completa ate 5.3):**
+- orchestrator/events.py — EventBus pub/sub com tipos de evento por etapa
+- orchestrator/server.py — FastAPI REST + WebSocket streaming + pause/resume + endpoints de projetos/historico/metricas/templates
+- orchestrator/cli.py — comando `orchestrate dashboard`
+- dashboard/ — projeto React+Vite+Tailwind completo
+  - src/App.jsx, src/main.jsx — roteamento React Router
+  - src/components/ — Layout, Sidebar, Header, AgentCard, RunControls, PlanPanel, ReviewPanel, NewProjectModal
+  - src/pages/ — Home, RunDetail, Projects, ProjectDetail, History, Metrics
+  - src/hooks/ — useRunSocket.js (WebSocket), useApi.js
 
 ---
 
@@ -200,6 +211,77 @@ orchestrate status [--log-dir logs]
 [magenta] [5/5] Decisor...[/magenta]
 ```
 
+### Dashboard — Backend (`orchestrator/server.py`)
+
+```
+FastAPI app em localhost:8000
+  CORS: localhost:3000
+
+Endpoints REST:
+  POST   /api/run                   inicia ciclo, retorna run_id
+  GET    /api/run/{run_id}          status/resultado do ciclo
+  POST   /api/cancel/{run_id}       cancela ciclo
+  POST   /api/pause/{run_id}        pausa antes da proxima etapa
+  POST   /api/resume/{run_id}       retoma execucao pausada
+  POST   /api/edit-plan/{run_id}    substitui plano e retoma
+  POST   /api/batch                 inicia batch sequencial
+  GET    /api/batch/{batch_id}      status do batch
+  GET    /api/projects              lista projetos registrados
+  POST   /api/projects              registra novo projeto
+  DELETE /api/projects/{id}         remove projeto
+  GET    /api/projects/{id}/info    stack detection + path_exists
+  GET    /api/projects/{id}/readme  conteudo do README
+  GET    /api/projects/{id}/tree    arvore de diretorios
+  GET    /api/projects/{id}/config  YAML bruto + fields parseados
+  PUT    /api/projects/{id}/config  grava .orchestrator.yaml
+  POST   /api/projects/{id}/config-parse   parse YAML sem I/O (raw->visual)
+  GET    /api/projects/{id}/resolved-config  config 3 camadas + resolved_prompts
+  GET    /api/history               historico de ciclos
+  GET    /api/metrics               metricas agregadas
+  GET    /api/templates             lista templates
+  POST   /api/init                  cria projeto de template
+  GET    /api/health                health check
+
+WebSocket:
+  WS /ws/run/{run_id}  -- streaming de eventos + history replay + keepalive 30s
+
+Projetos registrados: ~/.orchestrator/projects.json
+RunState: in-memory, suporta multiplos clients WS por run
+```
+
+### Dashboard — Frontend (`dashboard/`)
+
+```
+React 18 + Vite + Tailwind CSS
+Roteamento: React Router v6
+
+Paginas:
+  /             Home -- task input, project selector, ultimas 5 execucoes
+  /run/:id      RunDetail -- 5 AgentCards em tempo real, PlanPanel, ReviewPanel
+  /projects     Projects -- lista com stack badges, new project modal
+  /projects/:id ProjectDetail -- tabs: Overview (README+tree+quick run) | Config | History
+  /history      History -- tabela paginada
+  /metrics      Metrics -- KPIs e tabela
+
+Componentes principais:
+  AgentCard     -- card por agente com status, streaming de resposta, tokens
+  RunControls   -- botoes Pause/Resume/Cancel/Edit Plan
+  PlanPanel     -- plano formatado + rounds do Critico + editor inline
+  ReviewPanel   -- diff viewer, issues por severidade, resultado do Decisor
+  NewProjectModal -- wizard: nome + path + template
+
+Hooks:
+  useRunSocket(runId) -- WebSocket com history replay e reconexao
+  api.get/post/put/delete -- fetch wrapper com base URL :8000
+
+Config Tab (5.3.3):
+  modo Visual: dropdowns providers, model inputs, number inputs, toggles git, textareas prompt overrides
+  modo Raw YAML: textarea editor
+  troca de modo: visual->raw serializa form; raw->visual chama /config-parse
+  save: Visual escreve apenas campos != default; Raw escreve conteudo literal
+  ResolvedPreview: tabela de campos com badge default/project + prompts expandiveis por role
+```
+
 ### Logger (`orchestrator/logger.py`)
 
 ```
@@ -246,21 +328,16 @@ CycleRecord    -- task, status, plan, review, decision, attempt,
 
 ## Proximos passos imediatos
 
-1. **Fase 5.1 — Backend API e WebSocket:**
-   - `orchestrator/events.py` — EventBus pub/sub com tipos de evento por etapa
-   - `orchestrator/server.py` — FastAPI com REST + WebSocket
-   - Endpoints: /api/run, /api/batch, /api/cancel, /api/pause, /api/resume, /api/projects, /api/history, /api/metrics
-   - WS /ws/run/{run_id} — streaming de eventos tempo real
-   - Comando `orchestrate dashboard` no cli.py
+1. **Fase 5.4 — Frontend Execucao por Fases:**
+   - Campo para descrever projeto inteiro, Planner quebra em fases/tasks
+   - Execucao fase por fase com revisao entre cada uma
+   - Timeline/kanban de progresso (fases como colunas, tasks como cards)
 
-2. **Fase 5.2 — Frontend Dashboard Base:**
-   - React + Vite + Tailwind em `dashboard/`
-   - Tela inicial: campo de task, selecao de projeto, botao executar
-   - Painel de execucao: 5 cards com status de cada agente em tempo real
-   - Controles: pausar, cancelar, editar plano
-   - Monitor de tokens e custo
-
-3. **Fases 5.3 a 5.5** — gestao de projetos, execucao por fases, historico e metricas visual
+2. **Fase 5.5 — Frontend Historico e Metricas Visual:**
+   - Graficos: aprovacoes ao longo do tempo, distribuicao por status, custo por projeto
+   - Tabela paginada com filtros por projeto/status/data
+   - Detalhes de ciclo: timeline Planning->Critic->Execute->Review->Decision
+   - Diff viewer com syntax highlighting
 
 Plano detalhado: `docs/Fase5_Dashboard_Plano.md`
 
