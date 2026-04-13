@@ -136,24 +136,93 @@ const SEV_STYLE = {
 }
 
 // ---------------------------------------------------------------------------
-// Cycle detail modal
+// Timeline — step node (colored circle)
 // ---------------------------------------------------------------------------
 
-function Section({ title, children }) {
-  const [open, setOpen] = useState(true)
+const NODE_STYLE = {
+  pass: 'bg-green-500 border-green-400 text-white',
+  fail: 'bg-red-500  border-red-400  text-white',
+  warn: 'bg-yellow-500 border-yellow-400 text-gray-900',
+  skip: 'bg-gray-800 border-gray-600 text-gray-500',
+}
+const NODE_ICON = { pass: '✓', fail: '✕', warn: '!', skip: '—' }
+
+function StepNode({ status }) {
+  const cls = NODE_STYLE[status] ?? NODE_STYLE.skip
   return (
-    <div className="border border-gray-800 rounded-xl overflow-hidden">
-      <button
-        onClick={() => setOpen(v => !v)}
-        className="w-full flex items-center gap-2 px-4 py-2.5 bg-gray-900/60 text-left hover:bg-gray-800/60 transition-colors"
-      >
-        <span className="text-sm font-medium text-gray-200 flex-1">{title}</span>
-        <span className="text-gray-600 text-xs">{open ? '▲' : '▼'}</span>
-      </button>
-      {open && <div className="px-4 py-4 space-y-3">{children}</div>}
+    <div className={`w-7 h-7 rounded-full border-2 flex items-center justify-center text-xs font-bold shrink-0 ${cls}`}>
+      {NODE_ICON[status] ?? '—'}
     </div>
   )
 }
+
+// ---------------------------------------------------------------------------
+// Timeline — single step row (expandable)
+// ---------------------------------------------------------------------------
+
+function TimelineStep({ nodeStatus, label, meta, defaultOpen = true, isLast = false, children }) {
+  const [open, setOpen] = useState(defaultOpen)
+  const hasContent = Boolean(children)
+
+  return (
+    <div className="flex gap-4">
+      {/* Left column: node + connector line */}
+      <div className="flex flex-col items-center">
+        <StepNode status={nodeStatus} />
+        {!isLast && (
+          <div className="w-px flex-1 bg-gray-800 my-1" style={{ minHeight: '1rem' }} />
+        )}
+      </div>
+
+      {/* Right column: header + body */}
+      <div className={`flex-1 min-w-0 ${isLast ? '' : 'pb-4'}`}>
+        <button
+          onClick={() => hasContent && setOpen(v => !v)}
+          className={`flex items-center gap-2 w-full text-left ${hasContent ? 'group' : 'cursor-default'}`}
+        >
+          <span className="text-sm font-semibold text-gray-200">{label}</span>
+          {meta && (
+            <span className="text-xs text-gray-500 truncate">{meta}</span>
+          )}
+          {hasContent && (
+            <span className="text-gray-600 text-xs ml-auto shrink-0">
+              {open ? '▲' : '▼'}
+            </span>
+          )}
+        </button>
+
+        {hasContent && open && (
+          <div className="mt-3 space-y-3">
+            {children}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Timeline helpers
+// ---------------------------------------------------------------------------
+
+function diffStats(diff) {
+  if (!diff) return { added: 0, removed: 0 }
+  const lines = diff.split('\n')
+  return {
+    added:   lines.filter(l => l.startsWith('+') && !l.startsWith('+++')).length,
+    removed: lines.filter(l => l.startsWith('-') && !l.startsWith('---')).length,
+  }
+}
+
+function execNodeStatus(status) {
+  if (['approved', 'committed'].includes(status)) return 'pass'
+  if (['escalated', 'rejected'].includes(status)) return 'fail'
+  return 'skip'
+}
+
+// ---------------------------------------------------------------------------
+// Cycle detail modal — timeline view
+// ---------------------------------------------------------------------------
 
 function CycleDetailModal({ entry, onClose }) {
   if (!entry) return null
@@ -162,19 +231,44 @@ function CycleDetailModal({ entry, onClose }) {
   const review   = entry.review   ?? null
   const decision = entry.decision ?? null
   const diff     = entry.diff     ?? ''
+  const { added, removed } = diffStats(diff)
+
+  // Step node statuses
+  const planStatus     = plan     ? 'pass' : 'skip'
+  const reviewStatus   = review   ? (review.approved  ? 'pass' : 'fail') : 'skip'
+  const decisionStatus = decision ? (decision.approved ? 'pass' : 'fail') : 'skip'
+  const execStatus     = execNodeStatus(entry.status)
+
+  // Plan meta
+  const createCount = (plan?.files_to_create ?? []).length
+  const modifyCount = (plan?.files_to_modify ?? []).length
+  const stepsCount  = (plan?.steps ?? []).length
+  const planMeta = plan
+    ? [
+        stepsCount  ? `${stepsCount} steps`   : null,
+        createCount ? `+${createCount} new`   : null,
+        modifyCount ? `~${modifyCount} edited` : null,
+        plan.estimated_complexity ? `complexity: ${plan.estimated_complexity}` : null,
+      ].filter(Boolean).join(' · ')
+    : 'no data'
+
+  // Review meta
+  const issueCount = (review?.issues ?? []).length
+  const reviewMeta = review
+    ? `${review.score}/10${issueCount ? ` · ${issueCount} issue${issueCount > 1 ? 's' : ''}` : ''}`
+    : 'no data'
 
   return (
-    // Backdrop
     <div
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm overflow-y-auto py-8 px-4"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
       <div className="bg-gray-950 border border-gray-800 rounded-2xl w-full max-w-3xl shadow-2xl">
 
-        {/* Modal header */}
+        {/* ── Modal header ── */}
         <div className="flex items-start gap-4 px-6 py-4 border-b border-gray-800">
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-gray-100 leading-snug line-clamp-2">
+            <p className="text-sm font-semibold text-gray-100 leading-snug">
               {entry.task}
             </p>
             <div className="flex items-center gap-3 mt-1.5 flex-wrap">
@@ -185,149 +279,187 @@ function CycleDetailModal({ entry, onClose }) {
               </span>
               {entry.commit_hash && (
                 <span className="text-xs font-mono text-indigo-400">
-                  {entry.commit_hash.slice(0, 8)}
+                  commit {entry.commit_hash.slice(0, 8)}
                 </span>
               )}
-              <span className="text-xs text-gray-600">attempt {entry.attempt}</span>
+              {entry.attempt > 1 && (
+                <span className="text-xs text-yellow-600">
+                  attempt #{entry.attempt}
+                </span>
+              )}
             </div>
           </div>
           <button
             onClick={onClose}
-            className="text-gray-600 hover:text-gray-300 text-xl leading-none transition-colors shrink-0"
+            className="text-gray-600 hover:text-gray-300 text-xl leading-none transition-colors shrink-0 mt-0.5"
           >
             ✕
           </button>
         </div>
 
-        {/* Modal body */}
-        <div className="px-6 py-5 space-y-4">
+        {/* ── Timeline body ── */}
+        <div className="px-6 py-6">
 
-          {/* Plan */}
-          {plan && (
-            <Section title="Plan">
-              {plan.description && (
-                <p className="text-sm text-gray-300 leading-relaxed">{plan.description}</p>
-              )}
-              {(plan.files_to_create ?? []).length > 0 && (
-                <div>
-                  <p className="text-xs text-gray-500 uppercase tracking-wider mb-1.5">Files to create</p>
-                  <ul className="space-y-0.5">
-                    {plan.files_to_create.map((f, i) => (
-                      <li key={i} className="text-xs font-mono text-green-400">+ {f}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {(plan.files_to_modify ?? []).length > 0 && (
-                <div>
-                  <p className="text-xs text-gray-500 uppercase tracking-wider mb-1.5">Files to modify</p>
-                  <ul className="space-y-0.5">
-                    {plan.files_to_modify.map((f, i) => (
-                      <li key={i} className="text-xs font-mono text-yellow-400">~ {f}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {(plan.steps ?? []).length > 0 && (
-                <div>
-                  <p className="text-xs text-gray-500 uppercase tracking-wider mb-1.5">Steps</p>
-                  <ol className="space-y-1.5">
-                    {plan.steps.map((s, i) => (
-                      <li key={i} className="flex gap-2 text-sm text-gray-300">
-                        <span className="text-indigo-400 font-mono shrink-0 w-5 text-right">{i + 1}.</span>
-                        <span className="leading-relaxed">{s}</span>
-                      </li>
-                    ))}
-                  </ol>
-                </div>
-              )}
-              {(plan.acceptance_criteria ?? []).length > 0 && (
-                <div>
-                  <p className="text-xs text-gray-500 uppercase tracking-wider mb-1.5">Acceptance criteria</p>
-                  <ul className="space-y-1.5">
-                    {plan.acceptance_criteria.map((c, i) => (
-                      <li key={i} className="flex gap-2 text-sm text-gray-300">
-                        <span className="text-green-400 shrink-0">✓</span>
-                        <span>{c}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </Section>
-          )}
+          {/* 1. Planning */}
+          <TimelineStep nodeStatus={planStatus} label="Planning" meta={planMeta}>
+            {plan && (
+              <>
+                {plan.description && (
+                  <p className="text-sm text-gray-300 leading-relaxed">{plan.description}</p>
+                )}
 
-          {/* Review */}
-          {review && (
-            <Section title={`Review — ${review.score}/10`}>
-              {/* Score bar */}
-              <div className="flex items-center gap-3">
-                <div className="flex-1 h-2 bg-gray-800 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all duration-500 ${
-                      review.score >= 8 ? 'bg-green-500' : review.score >= 6 ? 'bg-yellow-500' : 'bg-red-500'
-                    }`}
-                    style={{ width: `${Math.round((review.score / 10) * 100)}%` }}
-                  />
+                {(plan.files_to_create ?? []).length > 0 && (
+                  <div>
+                    <p className="text-xs text-gray-500 uppercase tracking-wider mb-1.5">Files to create</p>
+                    <ul className="space-y-0.5">
+                      {plan.files_to_create.map((f, i) => (
+                        <li key={i} className="text-xs font-mono text-green-400">+ {f}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {(plan.files_to_modify ?? []).length > 0 && (
+                  <div>
+                    <p className="text-xs text-gray-500 uppercase tracking-wider mb-1.5">Files to modify</p>
+                    <ul className="space-y-0.5">
+                      {plan.files_to_modify.map((f, i) => (
+                        <li key={i} className="text-xs font-mono text-yellow-400">~ {f}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {(plan.steps ?? []).length > 0 && (
+                  <div>
+                    <p className="text-xs text-gray-500 uppercase tracking-wider mb-1.5">Steps</p>
+                    <ol className="space-y-1.5">
+                      {plan.steps.map((s, i) => (
+                        <li key={i} className="flex gap-2 text-sm text-gray-300">
+                          <span className="text-indigo-400 font-mono shrink-0 w-5 text-right">{i + 1}.</span>
+                          <span className="leading-relaxed">{s}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                )}
+
+                {(plan.acceptance_criteria ?? []).length > 0 && (
+                  <div>
+                    <p className="text-xs text-gray-500 uppercase tracking-wider mb-1.5">Acceptance criteria</p>
+                    <ul className="space-y-1.5">
+                      {plan.acceptance_criteria.map((c, i) => (
+                        <li key={i} className="flex gap-2 text-sm text-gray-300">
+                          <span className="text-green-400 shrink-0">✓</span>
+                          <span>{c}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </>
+            )}
+          </TimelineStep>
+
+          {/* 2. Critic */}
+          <TimelineStep
+            nodeStatus="skip"
+            label="Critic loop"
+            meta="details not persisted in logs"
+            defaultOpen={false}
+          />
+
+          {/* 3. Execute */}
+          <TimelineStep
+            nodeStatus={execStatus}
+            label="Execute"
+            meta={diff ? `+${added} lines · −${removed} lines` : 'no diff available'}
+          >
+            <DiffViewer diff={diff} />
+          </TimelineStep>
+
+          {/* 4. Review */}
+          <TimelineStep nodeStatus={reviewStatus} label="Review (Gemini)" meta={reviewMeta}>
+            {review && (
+              <>
+                {/* Score bar */}
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 h-2 bg-gray-800 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        review.score >= 8 ? 'bg-green-500'
+                        : review.score >= 6 ? 'bg-yellow-500'
+                        : 'bg-red-500'
+                      }`}
+                      style={{ width: `${Math.round((review.score / 10) * 100)}%` }}
+                    />
+                  </div>
+                  <span className={`text-sm font-semibold tabular-nums ${
+                    review.score >= 8 ? 'text-green-400'
+                    : review.score >= 6 ? 'text-yellow-400'
+                    : 'text-red-400'
+                  }`}>
+                    {review.score}/10
+                  </span>
                 </div>
-                <span className={`text-sm font-semibold tabular-nums ${
-                  review.score >= 8 ? 'text-green-400' : review.score >= 6 ? 'text-yellow-400' : 'text-red-400'
-                }`}>
-                  {review.score}/10
-                </span>
-              </div>
 
-              {review.summary && (
-                <p className="text-sm text-gray-300 leading-relaxed">{review.summary}</p>
-              )}
+                {review.summary && (
+                  <p className="text-sm text-gray-300 leading-relaxed">{review.summary}</p>
+                )}
 
-              {(review.issues ?? []).length > 0 && (
-                <div>
-                  <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">
-                    Issues ({review.issues.length})
-                  </p>
-                  <div className="space-y-2">
-                    {review.issues.map((issue, i) => (
-                      <div key={i} className="border border-gray-800 rounded-lg p-3 space-y-1.5">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className={`text-xs px-2 py-0.5 rounded-full border ${SEV_STYLE[issue.severity] ?? SEV_STYLE.info}`}>
-                            {issue.severity}
-                          </span>
-                          {issue.file && (
-                            <span className="text-xs font-mono text-gray-500">
-                              {issue.file}{issue.line != null ? `:${issue.line}` : ''}
+                {(review.issues ?? []).length > 0 && (
+                  <div>
+                    <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">
+                      Issues ({review.issues.length})
+                    </p>
+                    <div className="space-y-2">
+                      {review.issues.map((issue, i) => (
+                        <div key={i} className="border border-gray-800 rounded-lg p-3 space-y-1.5">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={`text-xs px-2 py-0.5 rounded-full border ${SEV_STYLE[issue.severity] ?? SEV_STYLE.info}`}>
+                              {issue.severity}
                             </span>
+                            {issue.file && (
+                              <span className="text-xs font-mono text-gray-500">
+                                {issue.file}{issue.line != null ? `:${issue.line}` : ''}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-sm text-gray-300">{issue.description}</p>
+                          {issue.suggestion && (
+                            <p className="text-xs text-gray-500 italic">→ {issue.suggestion}</p>
                           )}
                         </div>
-                        <p className="text-sm text-gray-300">{issue.description}</p>
-                        {issue.suggestion && (
-                          <p className="text-xs text-gray-500 italic">→ {issue.suggestion}</p>
-                        )}
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
 
-              {(review.suggestions ?? []).length > 0 && (
-                <div>
-                  <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">Suggestions</p>
-                  <ul className="space-y-1">
-                    {review.suggestions.map((s, i) => (
-                      <li key={i} className="flex gap-2 text-sm text-gray-400">
-                        <span className="text-gray-600 shrink-0">→</span>
-                        <span>{s}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </Section>
-          )}
+                {(review.suggestions ?? []).length > 0 && (
+                  <div>
+                    <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">Suggestions</p>
+                    <ul className="space-y-1">
+                      {review.suggestions.map((s, i) => (
+                        <li key={i} className="flex gap-2 text-sm text-gray-400">
+                          <span className="text-gray-600 shrink-0">→</span>
+                          <span>{s}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </>
+            )}
+          </TimelineStep>
 
-          {/* Decision */}
-          {decision && (
-            <Section title={`Decision — ${decision.approved ? 'Coherent' : 'Inconsistent'}`}>
+          {/* 5. Decision */}
+          <TimelineStep
+            nodeStatus={decisionStatus}
+            label="Decision (Gemini)"
+            meta={decision ? (decision.approved ? 'Coherent with plan' : 'Inconsistent with plan') : 'no data'}
+            isLast
+          >
+            {decision && (
               <div className={`border rounded-xl p-4 space-y-3 ${
                 decision.approved
                   ? 'bg-green-900/20 border-green-800'
@@ -350,11 +482,8 @@ function CycleDetailModal({ entry, onClose }) {
                   </ul>
                 )}
               </div>
-            </Section>
-          )}
-
-          {/* Diff */}
-          <DiffViewer diff={diff} />
+            )}
+          </TimelineStep>
 
         </div>
       </div>
