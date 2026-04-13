@@ -223,6 +223,14 @@ async def _run_cycle_bg(state: RunState) -> None:
         state.status = "error"
         state.error = str(exc)
         state.finished_at = datetime.now().isoformat()
+        # Emit a terminal event so WebSocket clients exit the "running" state.
+        # Without this, the frontend hangs indefinitely after retry exhaustion
+        # or any other unhandled error, because the sentinel (None) is only
+        # pushed on cycle_approved / cycle_escalated events.
+        await state.event_bus.emit(
+            EventType.CYCLE_ESCALATED,
+            {"task": state.task, "reason": str(exc)},
+        )
 
 
 async def _run_batch_bg(
@@ -507,10 +515,6 @@ async def get_batch(batch_id: str) -> dict[str, Any]:
     }
 
 
-@app.post("/api/cancel/{run_id}")
-async def _cancel_alias(run_id: str) -> dict[str, Any]:  # type: ignore[misc]
-    # Handled above — this ensures batch_id can also be cancelled via the same endpoint.
-    return await cancel_run(run_id)
 
 
 # ---------------------------------------------------------------------------
