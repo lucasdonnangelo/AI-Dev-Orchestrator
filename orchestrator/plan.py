@@ -1,10 +1,12 @@
-"""Data models for the hierarchical project plan (PLANO.md)."""
+"""Data models and parser for the hierarchical project plan (PLANO.md)."""
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 
@@ -314,3 +316,121 @@ class ProjectPlan:
             phases=[Phase.from_dict(ph) for ph in data.get("phases", [])],
             metadata=data.get("metadata", {}),
         )
+
+
+# ---------------------------------------------------------------------------
+# PLANO.md parser
+# ---------------------------------------------------------------------------
+
+# Matches: ## Fase 1 — Name  or  ## Fase 1: Name  or  ## 1 Name
+_RE_PHASE = re.compile(r"^##\s+(?:Fase\s+)?(\d+)[\s\-\u2014:]+(.+)$")
+# Matches: ### 1.1 Name
+_RE_SUBPHASE = re.compile(r"^###\s+(\d+\.\d+)\s+(.+)$")
+# Matches: - [ ] 1.1.1 Description  /  - [x] ...  /  - [!] ...  /  - [>] ...
+_RE_TASK = re.compile(r"^-\s+\[([x!> ])\]\s+(\d+(?:\.\d+)+)\s+(.+)$", re.IGNORECASE)
+# Matches: # Title  (first h1 only)
+_RE_TITLE = re.compile(r"^#\s+(.+)$")
+
+_CHECKBOX_TO_STATUS: dict[str, PlanTaskStatus] = {
+    " ": PlanTaskStatus.PENDING,
+    "x": PlanTaskStatus.DONE,
+    "X": PlanTaskStatus.DONE,
+    "!": PlanTaskStatus.ESCALATED,
+    ">": PlanTaskStatus.RUNNING,
+}
+
+
+def parse_plan(path: str | Path) -> ProjectPlan:
+    """Parse a PLANO.md file and return a ProjectPlan.
+
+    Expected Markdown structure::
+
+        # Project Name
+
+        ## Fase 1 — Phase Name
+
+        ### 1.1 SubPhase Name
+
+        - [ ] 1.1.1 Task description
+        - [x] 1.1.2 Completed task
+        - [!] 1.1.3 Escalated task
+
+    Raises:
+        FileNotFoundError: if *path* does not exist.
+        ValueError: if the file has no recognisable title (# heading).
+    """
+    path = Path(path)
+    text = path.read_text(encoding="utf-8")
+    return _parse_text(text, source=str(path))
+
+
+def parse_plan_text(text: str) -> ProjectPlan:
+    """Parse PLANO.md content from a string (useful for testing)."""
+    return _parse_text(text, source="<string>")
+
+
+def _parse_text(text: str, source: str) -> ProjectPlan:
+    name: str | None = None
+    phases: list[Phase] = []
+    current_phase: Phase | None = None
+    current_subphase: SubPhase | None = None
+
+    for lineno, raw_line in enumerate(text.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        # --- project title ---
+        if name is None:
+            m = _RE_TITLE.match(line)
+            if m:
+                name = m.group(1).strip()
+                continue
+
+        # --- phase (## heading) ---
+        m = _RE_PHASE.match(line)
+        if m:
+            # flush current subphase into current phase before switching
+            if current_subphase is not None and current_phase is not None:
+                current_phase.subphases.append(current_subphase)
+                current_subphase = None
+            if current_phase is not None:
+                phases.append(current_phase)
+            phase_id = m.group(1).strip()
+            phase_name = m.group(2).strip()
+            current_phase = Phase(id=phase_id, name=phase_name)
+            continue
+
+        # --- subphase (### heading) ---
+        m = _RE_SUBPHASE.match(line)
+        if m:
+            if current_subphase is not None and current_phase is not None:
+                current_phase.subphases.append(current_subphase)
+            subphase_id = m.group(1).strip()
+            subphase_name = m.group(2).strip()
+            current_subphase = SubPhase(id=subphase_id, name=subphase_name)
+            continue
+
+        # --- task (- [x] ...) ---
+        m = _RE_TASK.match(line)
+        if m:
+            checkbox = m.group(1)
+            task_id = m.group(2).strip()
+            description = m.group(3).strip()
+            status = _CHECKBOX_TO_STATUS.get(checkbox, PlanTaskStatus.PENDING)
+            task = PlanTask(id=task_id, description=description, status=status)
+            if current_subphase is not None:
+                current_subphase.tasks.append(task)
+            # tasks outside a subphase are silently ignored (malformed plan)
+            continue
+
+    # flush remaining objects
+    if current_subphase is not None and current_phase is not None:
+        current_phase.subphases.append(current_subphase)
+    if current_phase is not None:
+        phases.append(current_phase)
+
+    if name is None:
+        raise ValueError(f"PLANO.md has no title (# heading): {source}")
+
+    return ProjectPlan(name=name, phases=phases)

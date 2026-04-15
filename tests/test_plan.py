@@ -1,6 +1,8 @@
-"""Unit tests for orchestrator/plan.py — data models for the hierarchical plan."""
+"""Unit tests for orchestrator/plan.py — data models and parser for the hierarchical plan."""
 
 from __future__ import annotations
+
+import textwrap
 
 import pytest
 
@@ -10,6 +12,8 @@ from orchestrator.plan import (
     PlanTaskStatus,
     ProjectPlan,
     SubPhase,
+    parse_plan,
+    parse_plan_text,
 )
 
 
@@ -407,3 +411,205 @@ class TestProjectPlan:
         plan = ProjectPlan.from_dict({"name": "Minimal"})
         assert plan.phases == []
         assert plan.metadata == {}
+
+
+# ---------------------------------------------------------------------------
+# parse_plan_text  (Task 6.1.2)
+# ---------------------------------------------------------------------------
+
+_FULL_PLAN = textwrap.dedent("""\
+    # FinanceAI
+
+    ## Fase 1 — Setup Inicial
+
+    ### 1.1 Estrutura do Projeto
+
+    - [ ] 1.1.1 Criar estrutura de pastas
+    - [x] 1.1.2 Configurar pyproject.toml
+    - [!] 1.1.3 Configurar banco de dados
+
+    ### 1.2 Autenticacao
+
+    - [ ] 1.2.1 Implementar JWT
+    - [ ] 1.2.2 Criar endpoints de login
+
+    ## Fase 2 — Features
+
+    ### 2.1 CRUD
+
+    - [ ] 2.1.1 Criar modelo de dados
+""")
+
+
+class TestParsePlanText:
+    def test_project_name(self):
+        plan = parse_plan_text(_FULL_PLAN)
+        assert plan.name == "FinanceAI"
+
+    def test_phase_count(self):
+        plan = parse_plan_text(_FULL_PLAN)
+        assert len(plan.phases) == 2
+
+    def test_phase_ids_and_names(self):
+        plan = parse_plan_text(_FULL_PLAN)
+        assert plan.phases[0].id == "1"
+        assert plan.phases[0].name == "Setup Inicial"
+        assert plan.phases[1].id == "2"
+        assert plan.phases[1].name == "Features"
+
+    def test_subphase_count_phase1(self):
+        plan = parse_plan_text(_FULL_PLAN)
+        assert len(plan.phases[0].subphases) == 2
+
+    def test_subphase_ids_and_names(self):
+        plan = parse_plan_text(_FULL_PLAN)
+        sp = plan.phases[0].subphases[0]
+        assert sp.id == "1.1"
+        assert sp.name == "Estrutura do Projeto"
+
+    def test_task_count_subphase_1_1(self):
+        plan = parse_plan_text(_FULL_PLAN)
+        assert len(plan.phases[0].subphases[0].tasks) == 3
+
+    def test_task_pending_status(self):
+        plan = parse_plan_text(_FULL_PLAN)
+        t = plan.get_task("1.1.1")
+        assert t is not None
+        assert t.status == PlanTaskStatus.PENDING
+        assert t.description == "Criar estrutura de pastas"
+
+    def test_task_done_status(self):
+        plan = parse_plan_text(_FULL_PLAN)
+        t = plan.get_task("1.1.2")
+        assert t is not None
+        assert t.status == PlanTaskStatus.DONE
+
+    def test_task_escalated_status(self):
+        plan = parse_plan_text(_FULL_PLAN)
+        t = plan.get_task("1.1.3")
+        assert t is not None
+        assert t.status == PlanTaskStatus.ESCALATED
+
+    def test_task_ids_correct(self):
+        plan = parse_plan_text(_FULL_PLAN)
+        ids = [t.id for t in plan.all_tasks]
+        assert ids == ["1.1.1", "1.1.2", "1.1.3", "1.2.1", "1.2.2", "2.1.1"]
+
+    def test_total_task_count(self):
+        plan = parse_plan_text(_FULL_PLAN)
+        assert len(plan.all_tasks) == 6
+
+    def test_next_pending_skips_done_and_escalated(self):
+        plan = parse_plan_text(_FULL_PLAN)
+        # 1.1.1 is pending, so it should be returned
+        assert plan.next_pending().id == "1.1.1"
+
+    def test_progress_summary(self):
+        plan = parse_plan_text(_FULL_PLAN)
+        s = plan.progress_summary()
+        assert s["pending"] == 4
+        assert s["done"] == 1
+        assert s["escalated"] == 1
+
+    def test_no_title_raises(self):
+        with pytest.raises(ValueError, match="no title"):
+            parse_plan_text("## Fase 1 — Algo\n### 1.1 Sub\n- [ ] 1.1.1 Task\n")
+
+    def test_empty_phases_no_crash(self):
+        text = "# My Project\n"
+        plan = parse_plan_text(text)
+        assert plan.name == "My Project"
+        assert plan.phases == []
+
+    def test_phase_with_colon_separator(self):
+        text = textwrap.dedent("""\
+            # Proj
+
+            ## Fase 1: Nome da Fase
+
+            ### 1.1 Sub
+
+            - [ ] 1.1.1 Task
+        """)
+        plan = parse_plan_text(text)
+        assert plan.phases[0].id == "1"
+        assert plan.phases[0].name == "Nome da Fase"
+
+    def test_phase_without_fase_keyword(self):
+        text = textwrap.dedent("""\
+            # Proj
+
+            ## 1 — Setup
+
+            ### 1.1 Sub
+
+            - [ ] 1.1.1 Task
+        """)
+        plan = parse_plan_text(text)
+        assert plan.phases[0].id == "1"
+        assert plan.phases[0].name == "Setup"
+
+    def test_checkbox_case_insensitive_X(self):
+        text = textwrap.dedent("""\
+            # P
+
+            ## Fase 1 — F
+
+            ### 1.1 S
+
+            - [X] 1.1.1 Done task
+        """)
+        plan = parse_plan_text(text)
+        assert plan.get_task("1.1.1").status == PlanTaskStatus.DONE
+
+    def test_running_checkbox(self):
+        text = textwrap.dedent("""\
+            # P
+
+            ## Fase 1 — F
+
+            ### 1.1 S
+
+            - [>] 1.1.1 Running task
+        """)
+        plan = parse_plan_text(text)
+        assert plan.get_task("1.1.1").status == PlanTaskStatus.RUNNING
+
+    def test_blank_lines_ignored(self):
+        text = "\n\n# Proj\n\n\n## Fase 1 — F\n\n\n### 1.1 S\n\n- [ ] 1.1.1 T\n\n"
+        plan = parse_plan_text(text)
+        assert len(plan.all_tasks) == 1
+
+    def test_non_task_list_items_ignored(self):
+        text = textwrap.dedent("""\
+            # P
+
+            ## Fase 1 — F
+
+            ### 1.1 S
+
+            - [ ] 1.1.1 Task
+            - Regular list item (no checkbox)
+            - Another item
+        """)
+        plan = parse_plan_text(text)
+        assert len(plan.all_tasks) == 1
+
+
+class TestParsePlanFile:
+    def test_reads_file(self, tmp_path):
+        plan_file = tmp_path / "PLANO.md"
+        plan_file.write_text(_FULL_PLAN, encoding="utf-8")
+        plan = parse_plan(plan_file)
+        assert plan.name == "FinanceAI"
+        assert len(plan.all_tasks) == 6
+
+    def test_file_not_found(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            parse_plan(tmp_path / "NOPE.md")
+
+    def test_accepts_string_path(self, tmp_path):
+        plan_file = tmp_path / "PLANO.md"
+        plan_file.write_text(_FULL_PLAN, encoding="utf-8")
+        plan = parse_plan(str(plan_file))
+        assert plan.name == "FinanceAI"
