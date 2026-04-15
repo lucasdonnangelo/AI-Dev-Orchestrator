@@ -1,0 +1,409 @@
+"""Unit tests for orchestrator/plan.py — data models for the hierarchical plan."""
+
+from __future__ import annotations
+
+import pytest
+
+from orchestrator.plan import (
+    Phase,
+    PlanTask,
+    PlanTaskStatus,
+    ProjectPlan,
+    SubPhase,
+)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def make_task(
+    id: str = "1.1.1",
+    description: str = "Do something",
+    status: PlanTaskStatus = PlanTaskStatus.PENDING,
+) -> PlanTask:
+    return PlanTask(id=id, description=description, status=status)
+
+
+def make_subphase(id: str = "1.1", name: str = "Setup", tasks: list | None = None) -> SubPhase:
+    return SubPhase(
+        id=id,
+        name=name,
+        tasks=tasks if tasks is not None else [make_task("1.1.1"), make_task("1.1.2")],
+    )
+
+
+def make_phase(id: str = "1", name: str = "Fase 1", subphases: list | None = None) -> Phase:
+    return Phase(
+        id=id,
+        name=name,
+        subphases=subphases if subphases is not None else [make_subphase()],
+    )
+
+
+def make_plan(phases: list | None = None) -> ProjectPlan:
+    return ProjectPlan(
+        name="Test Project",
+        phases=phases if phases is not None else [make_phase()],
+    )
+
+
+# ---------------------------------------------------------------------------
+# PlanTaskStatus
+# ---------------------------------------------------------------------------
+
+
+class TestPlanTaskStatus:
+    def test_values(self):
+        assert PlanTaskStatus.PENDING.value == "pending"
+        assert PlanTaskStatus.RUNNING.value == "running"
+        assert PlanTaskStatus.DONE.value == "done"
+        assert PlanTaskStatus.ESCALATED.value == "escalated"
+        assert PlanTaskStatus.SKIPPED.value == "skipped"
+
+    def test_is_str_enum(self):
+        assert isinstance(PlanTaskStatus.DONE, str)
+
+
+# ---------------------------------------------------------------------------
+# PlanTask
+# ---------------------------------------------------------------------------
+
+
+class TestPlanTask:
+    def test_defaults(self):
+        t = PlanTask(id="1.1.1", description="Do x")
+        assert t.status == PlanTaskStatus.PENDING
+        assert t.commit_hash is None
+        assert t.started_at is None
+        assert t.finished_at is None
+
+    def test_is_pending(self):
+        t = make_task(status=PlanTaskStatus.PENDING)
+        assert t.is_pending is True
+        assert t.is_done is False
+
+    def test_is_done(self):
+        t = make_task(status=PlanTaskStatus.DONE)
+        assert t.is_done is True
+        assert t.is_pending is False
+
+    def test_is_terminal_done(self):
+        assert make_task(status=PlanTaskStatus.DONE).is_terminal is True
+
+    def test_is_terminal_escalated(self):
+        assert make_task(status=PlanTaskStatus.ESCALATED).is_terminal is True
+
+    def test_is_terminal_skipped(self):
+        assert make_task(status=PlanTaskStatus.SKIPPED).is_terminal is True
+
+    def test_is_not_terminal_pending(self):
+        assert make_task(status=PlanTaskStatus.PENDING).is_terminal is False
+
+    def test_is_not_terminal_running(self):
+        assert make_task(status=PlanTaskStatus.RUNNING).is_terminal is False
+
+    def test_mark_running(self):
+        t = make_task()
+        t.mark_running()
+        assert t.status == PlanTaskStatus.RUNNING
+        assert t.started_at is not None
+
+    def test_mark_done(self):
+        t = make_task()
+        t.mark_done(commit_hash="abc123")
+        assert t.status == PlanTaskStatus.DONE
+        assert t.commit_hash == "abc123"
+        assert t.finished_at is not None
+
+    def test_mark_done_no_commit(self):
+        t = make_task()
+        t.mark_done()
+        assert t.status == PlanTaskStatus.DONE
+        assert t.commit_hash is None
+
+    def test_mark_escalated(self):
+        t = make_task()
+        t.mark_escalated()
+        assert t.status == PlanTaskStatus.ESCALATED
+        assert t.finished_at is not None
+
+    def test_mark_skipped(self):
+        t = make_task()
+        t.mark_skipped()
+        assert t.status == PlanTaskStatus.SKIPPED
+        assert t.finished_at is not None
+
+    def test_reset(self):
+        t = make_task()
+        t.mark_done(commit_hash="abc123")
+        t.reset()
+        assert t.status == PlanTaskStatus.PENDING
+        assert t.commit_hash is None
+        assert t.started_at is None
+        assert t.finished_at is None
+
+    def test_round_trip_dict_minimal(self):
+        t = make_task()
+        assert PlanTask.from_dict(t.to_dict()) == t
+
+    def test_round_trip_dict_full(self):
+        t = PlanTask(
+            id="2.3.1",
+            description="Complex task",
+            status=PlanTaskStatus.DONE,
+            commit_hash="deadbeef",
+            started_at="2026-01-01T10:00:00",
+            finished_at="2026-01-01T10:05:00",
+        )
+        assert PlanTask.from_dict(t.to_dict()) == t
+
+    def test_from_dict_defaults_status_pending(self):
+        t = PlanTask.from_dict({"id": "1.1.1", "description": "x"})
+        assert t.status == PlanTaskStatus.PENDING
+
+    def test_to_dict_keys(self):
+        t = make_task()
+        d = t.to_dict()
+        assert set(d) == {"id", "description", "status", "commit_hash", "started_at", "finished_at"}
+
+
+# ---------------------------------------------------------------------------
+# SubPhase
+# ---------------------------------------------------------------------------
+
+
+class TestSubPhase:
+    def test_pending_tasks(self):
+        sp = make_subphase(tasks=[
+            make_task("1.1.1", status=PlanTaskStatus.DONE),
+            make_task("1.1.2", status=PlanTaskStatus.PENDING),
+            make_task("1.1.3", status=PlanTaskStatus.PENDING),
+        ])
+        assert len(sp.pending_tasks) == 2
+
+    def test_done_tasks(self):
+        sp = make_subphase(tasks=[
+            make_task("1.1.1", status=PlanTaskStatus.DONE),
+            make_task("1.1.2", status=PlanTaskStatus.PENDING),
+        ])
+        assert len(sp.done_tasks) == 1
+
+    def test_is_complete_all_done(self):
+        sp = make_subphase(tasks=[
+            make_task("1.1.1", status=PlanTaskStatus.DONE),
+            make_task("1.1.2", status=PlanTaskStatus.SKIPPED),
+        ])
+        assert sp.is_complete is True
+
+    def test_is_complete_not_all_terminal(self):
+        sp = make_subphase(tasks=[
+            make_task("1.1.1", status=PlanTaskStatus.DONE),
+            make_task("1.1.2", status=PlanTaskStatus.PENDING),
+        ])
+        assert sp.is_complete is False
+
+    def test_has_escalated(self):
+        sp = make_subphase(tasks=[
+            make_task("1.1.1", status=PlanTaskStatus.ESCALATED),
+        ])
+        assert sp.has_escalated is True
+
+    def test_has_not_escalated(self):
+        sp = make_subphase(tasks=[make_task("1.1.1", status=PlanTaskStatus.DONE)])
+        assert sp.has_escalated is False
+
+    def test_next_pending_first(self):
+        sp = make_subphase(tasks=[
+            make_task("1.1.1", status=PlanTaskStatus.DONE),
+            make_task("1.1.2", status=PlanTaskStatus.PENDING),
+            make_task("1.1.3", status=PlanTaskStatus.PENDING),
+        ])
+        assert sp.next_pending().id == "1.1.2"
+
+    def test_next_pending_none(self):
+        sp = make_subphase(tasks=[make_task("1.1.1", status=PlanTaskStatus.DONE)])
+        assert sp.next_pending() is None
+
+    def test_get_task_found(self):
+        sp = make_subphase()
+        assert sp.get_task("1.1.1") is not None
+
+    def test_get_task_not_found(self):
+        sp = make_subphase()
+        assert sp.get_task("9.9.9") is None
+
+    def test_round_trip_dict(self):
+        sp = make_subphase()
+        assert SubPhase.from_dict(sp.to_dict()) == sp
+
+    def test_from_dict_empty_tasks(self):
+        sp = SubPhase.from_dict({"id": "1.1", "name": "X"})
+        assert sp.tasks == []
+
+
+# ---------------------------------------------------------------------------
+# Phase
+# ---------------------------------------------------------------------------
+
+
+class TestPhase:
+    def _make_phase_with_statuses(self, *statuses: PlanTaskStatus) -> Phase:
+        tasks = [make_task(f"1.1.{i + 1}", status=s) for i, s in enumerate(statuses)]
+        sp = SubPhase(id="1.1", name="Sub", tasks=tasks)
+        return Phase(id="1", name="Fase 1", subphases=[sp])
+
+    def test_all_tasks(self):
+        ph = make_phase()
+        assert len(ph.all_tasks) == 2
+
+    def test_pending_tasks(self):
+        ph = self._make_phase_with_statuses(
+            PlanTaskStatus.DONE, PlanTaskStatus.PENDING, PlanTaskStatus.PENDING
+        )
+        assert len(ph.pending_tasks) == 2
+
+    def test_is_complete(self):
+        ph = self._make_phase_with_statuses(PlanTaskStatus.DONE, PlanTaskStatus.SKIPPED)
+        assert ph.is_complete is True
+
+    def test_is_not_complete(self):
+        ph = self._make_phase_with_statuses(PlanTaskStatus.DONE, PlanTaskStatus.PENDING)
+        assert ph.is_complete is False
+
+    def test_has_escalated(self):
+        ph = self._make_phase_with_statuses(PlanTaskStatus.ESCALATED)
+        assert ph.has_escalated is True
+
+    def test_next_pending_respects_order(self):
+        tasks = [
+            make_task("1.1.1", status=PlanTaskStatus.DONE),
+            make_task("1.1.2", status=PlanTaskStatus.PENDING),
+        ]
+        sp1 = SubPhase(id="1.1", name="A", tasks=tasks)
+        sp2 = SubPhase(id="1.2", name="B", tasks=[make_task("1.2.1", status=PlanTaskStatus.PENDING)])
+        ph = Phase(id="1", name="P", subphases=[sp1, sp2])
+        assert ph.next_pending().id == "1.1.2"
+
+    def test_next_pending_none_when_complete(self):
+        ph = self._make_phase_with_statuses(PlanTaskStatus.DONE)
+        assert ph.next_pending() is None
+
+    def test_get_subphase(self):
+        ph = make_phase()
+        assert ph.get_subphase("1.1") is not None
+        assert ph.get_subphase("9.9") is None
+
+    def test_get_task(self):
+        ph = make_phase()
+        assert ph.get_task("1.1.1") is not None
+        assert ph.get_task("9.9.9") is None
+
+    def test_round_trip_dict(self):
+        ph = make_phase()
+        assert Phase.from_dict(ph.to_dict()) == ph
+
+
+# ---------------------------------------------------------------------------
+# ProjectPlan
+# ---------------------------------------------------------------------------
+
+
+class TestProjectPlan:
+    def test_all_tasks_flattened(self):
+        plan = make_plan()
+        assert len(plan.all_tasks) == 2
+
+    def test_pending_tasks(self):
+        plan = make_plan()
+        assert len(plan.pending_tasks) == 2
+
+    def test_is_complete_all_done(self):
+        tasks = [make_task("1.1.1", status=PlanTaskStatus.DONE)]
+        plan = ProjectPlan(
+            name="P",
+            phases=[Phase(id="1", name="F", subphases=[SubPhase(id="1.1", name="S", tasks=tasks)])],
+        )
+        assert plan.is_complete is True
+
+    def test_is_complete_false(self):
+        plan = make_plan()
+        assert plan.is_complete is False
+
+    def test_next_pending_cross_phases(self):
+        ph1_tasks = [make_task("1.1.1", status=PlanTaskStatus.DONE)]
+        ph2_tasks = [make_task("2.1.1", status=PlanTaskStatus.PENDING)]
+        plan = ProjectPlan(
+            name="P",
+            phases=[
+                Phase(id="1", name="F1", subphases=[SubPhase(id="1.1", name="S1", tasks=ph1_tasks)]),
+                Phase(id="2", name="F2", subphases=[SubPhase(id="2.1", name="S2", tasks=ph2_tasks)]),
+            ],
+        )
+        assert plan.next_pending().id == "2.1.1"
+
+    def test_next_pending_none_when_complete(self):
+        tasks = [make_task("1.1.1", status=PlanTaskStatus.DONE)]
+        plan = ProjectPlan(
+            name="P",
+            phases=[Phase(id="1", name="F", subphases=[SubPhase(id="1.1", name="S", tasks=tasks)])],
+        )
+        assert plan.next_pending() is None
+
+    def test_get_phase(self):
+        plan = make_plan()
+        assert plan.get_phase("1") is not None
+        assert plan.get_phase("99") is None
+
+    def test_get_subphase(self):
+        plan = make_plan()
+        assert plan.get_subphase("1.1") is not None
+        assert plan.get_subphase("9.9") is None
+
+    def test_get_task(self):
+        plan = make_plan()
+        assert plan.get_task("1.1.1") is not None
+        assert plan.get_task("9.9.9") is None
+
+    def test_progress_summary_all_pending(self):
+        plan = make_plan()
+        summary = plan.progress_summary()
+        assert summary["pending"] == 2
+        assert summary["done"] == 0
+        assert summary["running"] == 0
+        assert summary["escalated"] == 0
+        assert summary["skipped"] == 0
+
+    def test_progress_summary_mixed(self):
+        tasks = [
+            make_task("1.1.1", status=PlanTaskStatus.DONE),
+            make_task("1.1.2", status=PlanTaskStatus.ESCALATED),
+            make_task("1.1.3", status=PlanTaskStatus.PENDING),
+        ]
+        plan = ProjectPlan(
+            name="P",
+            phases=[Phase(id="1", name="F", subphases=[SubPhase(id="1.1", name="S", tasks=tasks)])],
+        )
+        summary = plan.progress_summary()
+        assert summary["done"] == 1
+        assert summary["escalated"] == 1
+        assert summary["pending"] == 1
+
+    def test_round_trip_dict_empty(self):
+        plan = ProjectPlan(name="Empty")
+        assert ProjectPlan.from_dict(plan.to_dict()) == plan
+
+    def test_round_trip_dict_full(self):
+        plan = make_plan()
+        assert ProjectPlan.from_dict(plan.to_dict()) == plan
+
+    def test_metadata_preserved(self):
+        plan = ProjectPlan(name="P", metadata={"author": "Lucas", "version": "1.0"})
+        restored = ProjectPlan.from_dict(plan.to_dict())
+        assert restored.metadata == {"author": "Lucas", "version": "1.0"}
+
+    def test_from_dict_defaults(self):
+        plan = ProjectPlan.from_dict({"name": "Minimal"})
+        assert plan.phases == []
+        assert plan.metadata == {}
