@@ -327,7 +327,7 @@ _RE_PHASE = re.compile(r"^##\s+(?:Fase\s+)?(\d+)[\s\-\u2014:]+(.+)$")
 # Matches: ### 1.1 Name
 _RE_SUBPHASE = re.compile(r"^###\s+(\d+\.\d+)\s+(.+)$")
 # Matches: - [ ] 1.1.1 Description  /  - [x] ...  /  - [!] ...  /  - [>] ...
-_RE_TASK = re.compile(r"^-\s+\[([x!> ])\]\s+(\d+(?:\.\d+)+)\s+(.+)$", re.IGNORECASE)
+_RE_TASK = re.compile(r"^-\s+\[([x!>\- ])\]\s+(\d+(?:\.\d+)+)\s+(.+)$", re.IGNORECASE)
 # Matches: # Title  (first h1 only)
 _RE_TITLE = re.compile(r"^#\s+(.+)$")
 
@@ -337,6 +337,7 @@ _CHECKBOX_TO_STATUS: dict[str, PlanTaskStatus] = {
     "X": PlanTaskStatus.DONE,
     "!": PlanTaskStatus.ESCALATED,
     ">": PlanTaskStatus.RUNNING,
+    "-": PlanTaskStatus.SKIPPED,
 }
 
 
