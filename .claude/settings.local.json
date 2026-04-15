@@ -22,7 +22,11 @@
       "Bash(python -m pytest tests/test_events.py -v)",
       "Bash(npm run:*)",
       "Bash(curl -s -X POST http://localhost:8000/api/projects -H 'Content-Type: application/json' -d '{\"name\":\"ai-dev-orchestrator\",\"path\":\"C:/Users/lucas/OneDrive/Desktop/ai_dev_orchestrator\"}')",
-      "Bash(curl -s \"http://localhost:8000/api/projects/6e6773b2-d4e8-462c-a70b-07f2d421d5e7/info\")"
+      "Bash(curl -s \"http://localhost:8000/api/projects/6e6773b2-d4e8-462c-a70b-07f2d421d5e7/info\")",
+      "Bash(python -m orchestrator.cli plan status -d 'C:\\\\Users\\\\lucas\\\\AppData\\\\Local\\\\Temp\\\\tmpng5s9xmy')",
+      "Bash(python -m orchestrator.cli plan next -d 'C:\\\\Users\\\\lucas\\\\AppData\\\\Local\\\\Temp\\\\tmpng5s9xmy')",
+      "Bash(python -m orchestrator.cli plan reset 1.1.2 -d 'C:\\\\Users\\\\lucas\\\\AppData\\\\Local\\\\Temp\\\\tmpng5s9xmy' -y)",
+      "Bash(python -m pytest tests/ -q --tb=no)"
     ]
   }
 }

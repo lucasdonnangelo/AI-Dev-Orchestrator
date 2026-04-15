@@ -929,5 +929,203 @@ def dashboard(host: str, port: int, no_browser: bool) -> None:
     uvicorn.run(app, host=host, port=port)
 
 
+# ---------------------------------------------------------------------------
+# plan sub-group (Fase 6)
+# ---------------------------------------------------------------------------
+
+def _find_plano(project_dir: str) -> Path:
+    """Return path to PLANO.md inside *project_dir*, or raise ClickException."""
+    p = Path(project_dir).resolve() / "PLANO.md"
+    if not p.exists():
+        raise click.ClickException(
+            f"PLANO.md not found in '{project_dir}'. "
+            "Create one manually or use 'orchestrate plan generate'."
+        )
+    return p
+
+
+_STATUS_ICON: dict[str, str] = {
+    # Use \[ so Rich treats them as literal brackets, not markup tags.
+    "pending":   r"\[ ]",
+    "running":   r"\[>]",
+    "done":      r"\[x]",
+    "escalated": r"\[!]",
+    "skipped":   r"\[-]",
+}
+_STATUS_COLOR: dict[str, str] = {
+    "pending":   "dim",
+    "running":   "blue",
+    "done":      "green",
+    "escalated": "red",
+    "skipped":   "yellow",
+}
+
+
+@cli.group("plan")
+def plan_group() -> None:
+    """Manage and execute a hierarchical project plan (PLANO.md)."""
+
+
+@plan_group.command("status")
+@click.option(
+    "--project-dir", "-d",
+    default=".",
+    show_default=True,
+    help="Path to the project directory containing PLANO.md.",
+)
+def plan_status(project_dir: str) -> None:
+    """Show progress of the hierarchical plan.
+
+    Reads PLANO.md and displays a table of all phases, subfases and tasks with
+    their current status.
+
+    \b
+    Examples:
+      orchestrate plan status
+      orchestrate plan status -d ./myproject
+    """
+    from orchestrator.plan import parse_plan
+
+    plano = _find_plano(project_dir)
+    plan = parse_plan(plano)
+
+    summary = plan.progress_summary()
+    total = len(plan.all_tasks)
+    done = summary["done"]
+    pct = f"{done * 100 // total}%" if total else "0%"
+
+    console.print(
+        Panel(
+            f"[bold]{plan.name}[/bold]   "
+            f"[green]{done}[/green] / {total} tasks done  ({pct})",
+            title="Plan Status",
+            border_style="blue",
+        )
+    )
+
+    for phase in plan.phases:
+        ph_done = len(phase.done_tasks)
+        ph_total = len(phase.all_tasks)
+        ph_color = "green" if phase.is_complete else ("yellow" if ph_done else "dim")
+        console.print(
+            f"\n[{ph_color}][bold]Fase {phase.id} -- {phase.name}[/bold][/{ph_color}]"
+            f"  [dim]{ph_done}/{ph_total}[/dim]"
+        )
+
+        for sp in phase.subphases:
+            sp_done = len(sp.done_tasks)
+            sp_total = len(sp.tasks)
+            sp_color = "green" if sp.is_complete else "dim"
+            console.print(
+                f"  [{sp_color}]{sp.id} {sp.name}[/{sp_color}]"
+                f"  [dim]{sp_done}/{sp_total}[/dim]"
+            )
+
+            for task in sp.tasks:
+                st = task.status.value
+                icon = _STATUS_ICON[st]
+                color = _STATUS_COLOR[st]
+                commit_info = f"  [dim]({task.commit_hash})[/dim]" if task.commit_hash else ""
+                console.print(
+                    f"    [{color}]{icon} {task.id}[/{color}]  {task.description}{commit_info}"
+                )
+
+
+@plan_group.command("next")
+@click.option(
+    "--project-dir", "-d",
+    default=".",
+    show_default=True,
+    help="Path to the project directory containing PLANO.md.",
+)
+def plan_next(project_dir: str) -> None:
+    """Show the next pending task in the plan.
+
+    \b
+    Examples:
+      orchestrate plan next
+      orchestrate plan next -d ./myproject
+    """
+    from orchestrator.plan import parse_plan
+
+    plano = _find_plano(project_dir)
+    plan = parse_plan(plano)
+
+    task = plan.next_pending()
+    if task is None:
+        console.print("[green][OK] All tasks are complete (or none are pending).[/green]")
+        return
+
+    # Find its parent phase and subphase for context
+    phase = next(
+        (ph for ph in plan.phases for sp in ph.subphases if task in sp.tasks),
+        None,
+    )
+    subphase = next(
+        (sp for ph in plan.phases for sp in ph.subphases if task in sp.tasks),
+        None,
+    )
+
+    lines = [f"[bold]{task.id}[/bold]  {task.description}"]
+    if phase and subphase:
+        lines.append(
+            f"[dim]Fase {phase.id} -- {phase.name}  >  {subphase.id} {subphase.name}[/dim]"
+        )
+
+    # Show remaining count in the same subfase
+    if subphase:
+        remaining = len(subphase.pending_tasks)
+        lines.append(f"[dim]{remaining} pending task(s) in this subfase[/dim]")
+
+    console.print(Panel("\n".join(lines), title="Next Task", border_style="cyan"))
+
+
+@plan_group.command("reset")
+@click.argument("task_id")
+@click.option(
+    "--project-dir", "-d",
+    default=".",
+    show_default=True,
+    help="Path to the project directory containing PLANO.md.",
+)
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt.")
+def plan_reset(task_id: str, project_dir: str, yes: bool) -> None:
+    """Reset TASK_ID to pending status in PLANO.md.
+
+    Clears the commit hash and timestamps so the task will be re-executed on
+    the next 'orchestrate plan run'.
+
+    \b
+    Examples:
+      orchestrate plan reset 1.1.3
+      orchestrate plan reset 1.2.1 -d ./myproject -y
+    """
+    from orchestrator.plan import parse_plan, write_plan
+
+    plano = _find_plano(project_dir)
+    plan = parse_plan(plano)
+
+    task = plan.get_task(task_id)
+    if task is None:
+        raise click.ClickException(f"Task '{task_id}' not found in PLANO.md.")
+
+    old_status = task.status.value
+    if old_status == "pending":
+        console.print(f"[yellow]Task {task_id} is already pending — nothing to do.[/yellow]")
+        return
+
+    if not yes:
+        click.confirm(
+            f"Reset task {task_id} ({task.description[:60]}) "
+            f"from '{old_status}' to 'pending'?",
+            default=True,
+            abort=True,
+        )
+
+    task.reset()
+    write_plan(plan, plano)
+    console.print(f"[green][OK] Task {task_id} reset to pending.[/green]")
+
+
 if __name__ == "__main__":
     cli()
