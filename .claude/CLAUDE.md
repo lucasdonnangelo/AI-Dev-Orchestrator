@@ -48,41 +48,27 @@ Voce (task)
 ### [OK] Fase 2 — Multi-Model e Robustez (COMPLETA)
 ### [OK] Fase 3 — Orquestracao Avancada (COMPLETA)
 ### [OK] Fase 4 — Extensibilidade (COMPLETA)
+### [OK] Fase 5 — Dashboard Visual (COMPLETA — 5.4 pulada intencionalmente)
 
-175 testes passando. 6/6 tasks do batch cobaia aprovadas. Sistema validado end-to-end.
+374 testes passando. 6/6 tasks do batch cobaia aprovadas. Sistema validado end-to-end.
 
-### [>>] Fase 5 — Dashboard Visual (EM ANDAMENTO — 5.4 pendente)
+### [>>] Fase 6 — Orquestracao por Plano Hierarquico (EM ANDAMENTO)
 
-Plano detalhado em: `docs/Fase5_Dashboard_Plano.md`
+Plano detalhado em: `docs/Fase6_Plano_Hierarquico.md`
 
-#### [OK] 5.1 Backend API e WebSocket
-- `orchestrator/events.py` — EventBus pub/sub com tipos de evento por etapa
-- `orchestrator/server.py` — FastAPI com REST + WebSocket
-- Endpoints: /api/run, /api/batch, /api/cancel, /api/pause, /api/resume, /api/projects, /api/history, /api/metrics
-- WS /ws/run/{run_id} — streaming de eventos tempo real
-- Comando `orchestrate dashboard` no cli.py
+#### [OK] 6.1 Parser e Modelo de Dados
+- `orchestrator/plan.py` — PlanTaskStatus, PlanTask, SubPhase, Phase, ProjectPlan
+- `parse_plan(path)` / `parse_plan_text(text)` — parser Markdown hierarquico
+- `write_plan(plan, path)` — writer in-place (preserva formatacao, atualiza so checkboxes)
+- CLI: `orchestrate plan status` / `plan next` / `plan reset TASK_ID`
+- `tests/test_plan.py` — 94 testes
 
-#### [OK] 5.2 Frontend — Dashboard Base
-- React + Vite + Tailwind em `dashboard/`
-- Tela inicial: campo de task, selecao de projeto, botao executar
-- Painel de execucao: 5 cards com status de cada agente em tempo real
-- Controles: pausar, cancelar, editar plano
-- Monitor de tokens e custo
+#### [>>] 6.2 Motor de Execucao por Plano (PROXIMA)
+- `orchestrator/plan_runner.py` — run_plan, contexto acumulado, pausa, retomada
 
-#### [OK] 5.3 Frontend — Gestao de Projetos
-- Lista de projetos registrados com stack, historico
-- Novo projeto via wizard com templates
-- Config visual do .orchestrator.yaml (editor visual + preview 3 camadas)
-
-#### [>>] 5.4 Frontend — Execucao por Fases (PROXIMA)
-- Descrever projeto inteiro, Planner quebra em fases/tasks
-- Executar fase por fase com revisao entre cada uma
-- Timeline/kanban de progresso
-
-#### [OK] 5.5 Frontend — Historico e Metricas Visual
-- History: tabela paginada, filtros status/data, CycleDetailModal com timeline visual
-- Metrics: 4 KPI cards, LineChart/PieChart/BarChart (recharts), tabela top 5 runs
-- Timeline de ciclo: 5 etapas (Planning/Critic/Execute/Review/Decision) com StepNode colorido
+#### [ ] 6.3 Critic de Coerencia Entre Tasks
+#### [ ] 6.4 Comando CLI Principal (plan run)
+#### [ ] 6.5 Geracao de Plano por IA (plan generate)
 
 ## Estrutura do Projeto
 
@@ -107,6 +93,7 @@ ai-dev-orchestrator/
 │   ├── templates.py          # [OK] Templates de projeto
 │   ├── events.py             # [OK] EventBus
 │   ├── server.py             # [OK] FastAPI backend
+│   ├── plan.py               # [OK] Modelo hierarquico + parse_plan + write_plan (Fase 6)
 │   ├── providers/
 │   │   ├── __init__.py       # [OK] Factory + plugin registry
 │   │   ├── base.py           # [OK] BaseAgent

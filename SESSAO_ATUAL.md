@@ -1,6 +1,6 @@
 # Sessao Atual — AI Dev Orchestrator
 
-**Ultima atualizacao:** 13/04/2026 (Fase 5 concluida — iniciando Fase 6)
+**Ultima atualizacao:** 15/04/2026 (Fase 6.1 concluida — iniciando Fase 6.2)
 **Branch:** main
 
 ---
@@ -52,37 +52,37 @@ Voce (task)
 | 5.3 — Frontend Gestao de Projetos | lista de projetos, detalhes, config visual (editor visual + preview 3 camadas) | COMPLETA |
 | 5.4 — Frontend Execucao por Fases | planejamento incremental, kanban/timeline de progresso | PULADA (intencional) |
 | 5.5 — Frontend Historico e Metricas | graficos, diff viewer avancado, detalhes de ciclo | COMPLETA |
-| 6 — Orquestracao por Plano Hierarquico | PLANO.md estruturado, execucao autonoma fase a fase, retomada de progresso | PROXIMA |
+| 6.1 — Parser e Modelo de Dados | plan.py (ProjectPlan/Phase/SubPhase/PlanTask), parse_plan, write_plan, CLI plan status/next/reset | COMPLETA |
+| 6.2 — Motor de Execucao por Plano | plan_runner.py, run_plan, contexto acumulado, pausa, retomada | PROXIMA |
+| 6.3 — Critic de Coerencia Entre Tasks | phase_context no critic, critic_system.md atualizado | PENDENTE |
+| 6.4 — Comando CLI Principal | orchestrate plan run (--phase/--subtask/--auto/--dry-run), output visual | PENDENTE |
+| 6.5 — Geracao de Plano por IA | project_planner.py, orchestrate plan generate | PENDENTE |
 
 ---
 
 ## Ultima tarefa aprovada
 
-**Tarefa:** Fase 5 concluida + correcoes de infraestrutura pos-5.5
+**Tarefa:** Fase 6.1 — Parser e Modelo de Dados (PLANO.md)
 **Commits relevantes:**
-- `1a9e108` feat: Phase 5.5.3 - cycle detail timeline with expandable steps and diff viewer
-- `90dcf75` feat: WebSocket auto-reconnect (5x/2s) with state reset on unexpected close
-- `8877091` fix: retry defaults 5x/60s, emit cycle_escalated on bg error, revert vite proxy to 8000
-- `20f2b7b` fix: run claude-agent-sdk in thread pool to unblock FastAPI event loop during execution
-- `eac30aa` feat: Teste aplicado em cobaia bem sucedido. Adiciona arquivo do plano para a fase 6.
+- `9ba8f42` feat: Phase 6.1.1 - hierarchical plan data model with lifecycle and serialization
+- `48a7cff` feat: Phase 6.1.2 - PLANO.md parser with regex-based hierarchy extraction
+- `8509f83` feat: Phase 6.1.3 - PLANO.md writer with in-place checkbox update and full render fallback
+- `b408797` feat: Phase 6.1 complete - plan status, next and reset CLI commands
 
-**Correcoes aplicadas apos conclusao da Fase 5:**
-- WebSocket auto-reconexao: 5 tentativas com backoff de 2s, reset de estado em fechamento inesperado
-- Event loop fix: executor (claude-agent-sdk) agora roda via `asyncio.to_thread(_run_query_sync, ...)` — event loop principal do FastAPI livre para processar WS durante execucao do Executor
-- Modelo Gemini alterado: `gemini-2.5-flash` -> `gemini-2.5-flash-lite` (Critico, Reviewer, Decisor)
-- 5.4 pulada intencionalmente — funcionalidade coberta pelo escopo da Fase 6
-
-**Arquivos criados/modificados relevantes (Fase 5 completa):**
-- orchestrator/events.py — EventBus pub/sub com tipos de evento por etapa
-- orchestrator/server.py — FastAPI REST + WebSocket streaming + pause/resume + endpoints completos
-- orchestrator/executor.py — _run_query_sync + asyncio.to_thread para nao bloquear event loop
-- orchestrator/cli.py — comando `orchestrate dashboard`
-- dashboard/ — projeto React+Vite+Tailwind completo
-  - src/App.jsx, src/main.jsx — roteamento React Router
-  - src/components/ — Layout, Sidebar, Header, AgentCard, RunControls, PlanPanel, ReviewPanel, NewProjectModal
-  - src/pages/ — Home, RunDetail, Projects, ProjectDetail, History, Metrics
-  - src/hooks/ — useRunSocket.js (WebSocket com reconexao automatica), useApi.js
-- docs/Fase6_Plano_Hierarquico.md — plano detalhado da Fase 6
+**O que foi implementado (Fase 6.1):**
+- `orchestrator/plan.py` — modulo completo com:
+  - `PlanTaskStatus` (pending/running/done/escalated/skipped)
+  - `PlanTask` — task atomica com lifecycle (mark_running/done/escalated/skipped/reset)
+  - `SubPhase`, `Phase`, `ProjectPlan` — hierarquia com helpers de navegacao e progresso
+  - `parse_plan(path)` / `parse_plan_text(text)` — parser Markdown (regex linha-a-linha)
+  - `write_plan(plan, path)` — writer in-place (so atualiza checkboxes, preserva formatacao)
+  - `_render_plan(plan)` — geracao de PLANO.md do zero (fallback se arquivo nao existe)
+- `orchestrator/cli.py` — grupo `plan` com subcomandos:
+  - `orchestrate plan status [-d dir]` — tabela hierarquica com progresso por fase/subfase
+  - `orchestrate plan next [-d dir]` — proxima task pendente com contexto de localizacao
+  - `orchestrate plan reset TASK_ID [-d dir] [-y]` — reseta task para pending no PLANO.md
+- `tests/test_plan.py` — 94 testes (modelos, lifecycle, serializacao, parser, writer)
+- Total: 374 testes passando
 
 ---
 
@@ -358,13 +358,12 @@ CycleRecord    -- task, status, plan, review, decision, attempt,
 
 ## Proximos passos imediatos
 
-1. **Fase 6 — Orquestracao por Plano Hierarquico:**
-   - Ler PLANO.md estruturado em fases/subfases/tasks (formato Markdown com checkboxes)
-   - Executar cada task pelo ciclo completo de agentes autonomamente
-   - Marcar progresso ([x]) no PLANO.md apos cada task aprovada
-   - Parar para validacao humana ao fim de cada fase/subfase
-   - Retomar de onde parou se interrompido (parse de [x] vs [ ])
-   - Manter contexto acumulado entre tasks da mesma fase
+1. **Fase 6.2 — Motor de Execucao por Plano:**
+   - Criar `orchestrator/plan_runner.py` com `run_plan(plan_path, config, project_dir, options)`
+   - Identificar proxima task pendente, executar `run_cycle`, atualizar PLANO.md via `write_plan`
+   - Contexto acumulado entre tasks da mesma fase/subfase (tasks concluidas + commits)
+   - Pausa configuravel ao fim de cada subfase/fase com resumo e confirmacao humana
+   - Retomada idempotente: tasks `done` puladas, `escalated` pergunta se retenta ou pula
 
 Plano detalhado: `docs/Fase6_Plano_Hierarquico.md`
 
