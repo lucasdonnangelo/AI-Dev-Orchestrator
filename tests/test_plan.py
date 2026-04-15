@@ -14,6 +14,7 @@ from orchestrator.plan import (
     SubPhase,
     parse_plan,
     parse_plan_text,
+    write_plan,
 )
 
 
@@ -613,3 +614,156 @@ class TestParsePlanFile:
         plan_file.write_text(_FULL_PLAN, encoding="utf-8")
         plan = parse_plan(str(plan_file))
         assert plan.name == "FinanceAI"
+
+
+# ---------------------------------------------------------------------------
+# write_plan  (Task 6.1.3)
+# ---------------------------------------------------------------------------
+
+
+class TestWritePlan:
+    """write_plan updates checkboxes in-place, preserving all other content."""
+
+    def _write_and_reparse(self, tmp_path, original_text: str, plan: ProjectPlan) -> ProjectPlan:
+        p = tmp_path / "PLANO.md"
+        p.write_text(original_text, encoding="utf-8")
+        write_plan(plan, p)
+        return parse_plan(p)
+
+    # --- checkbox update correctness ---
+
+    def test_marks_done(self, tmp_path):
+        plan = parse_plan_text(_FULL_PLAN)
+        plan.get_task("1.1.1").mark_done(commit_hash="abc")
+        reparsed = self._write_and_reparse(tmp_path, _FULL_PLAN, plan)
+        assert reparsed.get_task("1.1.1").status == PlanTaskStatus.DONE
+
+    def test_marks_escalated(self, tmp_path):
+        plan = parse_plan_text(_FULL_PLAN)
+        plan.get_task("1.2.1").mark_escalated()
+        reparsed = self._write_and_reparse(tmp_path, _FULL_PLAN, plan)
+        assert reparsed.get_task("1.2.1").status == PlanTaskStatus.ESCALATED
+
+    def test_marks_running(self, tmp_path):
+        plan = parse_plan_text(_FULL_PLAN)
+        plan.get_task("1.2.2").mark_running()
+        reparsed = self._write_and_reparse(tmp_path, _FULL_PLAN, plan)
+        assert reparsed.get_task("1.2.2").status == PlanTaskStatus.RUNNING
+
+    def test_marks_skipped(self, tmp_path):
+        plan = parse_plan_text(_FULL_PLAN)
+        plan.get_task("2.1.1").mark_skipped()
+        p = tmp_path / "PLANO.md"
+        p.write_text(_FULL_PLAN, encoding="utf-8")
+        write_plan(plan, p)
+        content = p.read_text(encoding="utf-8")
+        # skipped uses [-] which parser maps to pending (unknown checkbox falls back)
+        # we verify the raw checkbox char is written correctly
+        assert "[-] 2.1.1" in content
+
+    def test_multiple_updates_at_once(self, tmp_path):
+        plan = parse_plan_text(_FULL_PLAN)
+        plan.get_task("1.1.1").mark_done()
+        plan.get_task("1.1.2").mark_done()  # was already done; stays done
+        plan.get_task("1.2.1").mark_escalated()
+        reparsed = self._write_and_reparse(tmp_path, _FULL_PLAN, plan)
+        assert reparsed.get_task("1.1.1").status == PlanTaskStatus.DONE
+        assert reparsed.get_task("1.1.2").status == PlanTaskStatus.DONE
+        assert reparsed.get_task("1.2.1").status == PlanTaskStatus.ESCALATED
+        assert reparsed.get_task("1.2.2").status == PlanTaskStatus.PENDING  # untouched
+
+    # --- formatting preservation ---
+
+    def test_headings_preserved(self, tmp_path):
+        plan = parse_plan_text(_FULL_PLAN)
+        plan.get_task("1.1.1").mark_done()
+        p = tmp_path / "PLANO.md"
+        p.write_text(_FULL_PLAN, encoding="utf-8")
+        write_plan(plan, p)
+        content = p.read_text(encoding="utf-8")
+        assert "# FinanceAI" in content
+        assert "## Fase 1" in content
+        assert "### 1.1 Estrutura do Projeto" in content
+
+    def test_blank_lines_preserved(self, tmp_path):
+        plan = parse_plan_text(_FULL_PLAN)
+        p = tmp_path / "PLANO.md"
+        p.write_text(_FULL_PLAN, encoding="utf-8")
+        write_plan(plan, p)
+        content = p.read_text(encoding="utf-8")
+        # original has blank lines between sections; they must survive
+        assert "\n\n" in content
+
+    def test_unknown_task_id_line_unchanged(self, tmp_path):
+        """Task lines whose ID is absent from the plan are written verbatim."""
+        text = textwrap.dedent("""\
+            # P
+
+            ## Fase 1 — F
+
+            ### 1.1 S
+
+            - [ ] 1.1.1 Task A
+            - [ ] 9.9.9 Ghost task
+        """)
+        plan = parse_plan_text(text)
+        # Remove 9.9.9 from the plan so it's unknown during write
+        plan.phases[0].subphases[0].tasks = [
+            t for t in plan.phases[0].subphases[0].tasks if t.id == "1.1.1"
+        ]
+        plan.get_task("1.1.1").mark_done()
+        p = tmp_path / "PLANO.md"
+        p.write_text(text, encoding="utf-8")
+        write_plan(plan, p)
+        content = p.read_text(encoding="utf-8")
+        assert "- [ ] 9.9.9 Ghost task" in content
+        assert "- [x] 1.1.1 Task A" in content
+
+    def test_trailing_newline_always_present(self, tmp_path):
+        plan = parse_plan_text(_FULL_PLAN)
+        p = tmp_path / "PLANO.md"
+        p.write_text(_FULL_PLAN, encoding="utf-8")
+        write_plan(plan, p)
+        content = p.read_text(encoding="utf-8")
+        assert content.endswith("\n")
+
+    # --- round-trip: parse -> mutate -> write -> parse ---
+
+    def test_full_round_trip(self, tmp_path):
+        plan = parse_plan_text(_FULL_PLAN)
+        # Mark everything done
+        for task in plan.all_tasks:
+            task.mark_done()
+        p = tmp_path / "PLANO.md"
+        p.write_text(_FULL_PLAN, encoding="utf-8")
+        write_plan(plan, p)
+        reparsed = parse_plan(p)
+        assert all(t.status == PlanTaskStatus.DONE for t in reparsed.all_tasks)
+
+    # --- write to non-existent file (generate from scratch) ---
+
+    def test_creates_file_if_missing(self, tmp_path):
+        plan = parse_plan_text(_FULL_PLAN)
+        plan.get_task("1.1.1").mark_done()
+        new_file = tmp_path / "NEW_PLANO.md"
+        assert not new_file.exists()
+        write_plan(plan, new_file)
+        assert new_file.exists()
+        reparsed = parse_plan(new_file)
+        assert reparsed.name == "FinanceAI"
+        assert reparsed.get_task("1.1.1").status == PlanTaskStatus.DONE
+
+    def test_generated_file_is_parseable(self, tmp_path):
+        plan = parse_plan_text(_FULL_PLAN)
+        new_file = tmp_path / "GEN.md"
+        write_plan(plan, new_file)
+        reparsed = parse_plan(new_file)
+        assert len(reparsed.all_tasks) == len(plan.all_tasks)
+        assert reparsed.name == plan.name
+
+    def test_accepts_string_path(self, tmp_path):
+        plan = parse_plan_text(_FULL_PLAN)
+        p = tmp_path / "PLANO.md"
+        p.write_text(_FULL_PLAN, encoding="utf-8")
+        write_plan(plan, str(p))  # string, not Path
+        assert p.exists()

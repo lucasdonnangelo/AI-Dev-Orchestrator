@@ -434,3 +434,90 @@ def _parse_text(text: str, source: str) -> ProjectPlan:
         raise ValueError(f"PLANO.md has no title (# heading): {source}")
 
     return ProjectPlan(name=name, phases=phases)
+
+
+# ---------------------------------------------------------------------------
+# PLANO.md writer
+# ---------------------------------------------------------------------------
+
+_STATUS_TO_CHECKBOX: dict[PlanTaskStatus, str] = {
+    PlanTaskStatus.PENDING: " ",
+    PlanTaskStatus.RUNNING: ">",
+    PlanTaskStatus.DONE: "x",
+    PlanTaskStatus.ESCALATED: "!",
+    PlanTaskStatus.SKIPPED: "-",
+}
+
+# Matches a task line preserving leading whitespace and trailing content:
+# group 1 = prefix before '[', group 2 = checkbox char, group 3 = task-id + rest
+_RE_TASK_LINE = re.compile(r"^(-\s+\[)([x!>\- ])(\]\s+\d+(?:\.\d+)+\s+.+)$", re.IGNORECASE)
+
+
+def write_plan(plan: ProjectPlan, path: str | Path) -> None:
+    """Update PLANO.md in-place, rewriting only the checkbox of each task line.
+
+    The original file is read and every task line (``- [ ] N.N.N ...``) is
+    matched against *plan*.  The checkbox character is replaced to reflect the
+    task's current :class:`PlanTaskStatus`; all other content (headings, prose,
+    blank lines, indentation) is preserved verbatim.
+
+    If a task line references an ID that is not present in *plan* (e.g. the
+    plan was trimmed externally) the line is written unchanged.
+
+    Args:
+        plan: The :class:`ProjectPlan` whose task statuses are authoritative.
+        path: Path to the PLANO.md file to update (created if absent).
+    """
+    path = Path(path)
+
+    if path.exists():
+        original = path.read_text(encoding="utf-8")
+    else:
+        # No existing file — generate from scratch.
+        original = _render_plan(plan)
+
+    updated_lines: list[str] = []
+    for raw_line in original.splitlines(keepends=True):
+        stripped = raw_line.rstrip("\n").rstrip("\r")
+        m = _RE_TASK_LINE.match(stripped)
+        if m:
+            # Extract the task ID from the rest-of-line group (group 3).
+            # group 3 looks like:  "] 1.1.2 Some description"
+            rest = m.group(3)  # e.g. "] 1.1.1 Description"
+            id_match = re.match(r"\]\s+(\d+(?:\.\d+)+)", rest)
+            if id_match:
+                task_id = id_match.group(1)
+                task = plan.get_task(task_id)
+                if task is not None:
+                    new_checkbox = _STATUS_TO_CHECKBOX[task.status]
+                    eol = raw_line[len(stripped):]  # preserve original line ending
+                    updated_lines.append(m.group(1) + new_checkbox + rest + eol)
+                    continue
+        updated_lines.append(raw_line)
+
+    # Preserve a trailing newline if original had one, add one if generated.
+    content = "".join(updated_lines)
+    if not content.endswith("\n"):
+        content += "\n"
+
+    path.write_text(content, encoding="utf-8")
+
+
+def _render_plan(plan: ProjectPlan) -> str:
+    """Render a :class:`ProjectPlan` to PLANO.md Markdown from scratch.
+
+    Used when *write_plan* is called for a file that does not yet exist.
+    Produces a canonical Markdown structure that ``parse_plan`` can round-trip.
+    """
+    lines: list[str] = [f"# {plan.name}", ""]
+    for phase in plan.phases:
+        lines.append(f"## Fase {phase.id} \u2014 {phase.name}")
+        lines.append("")
+        for sp in phase.subphases:
+            lines.append(f"### {sp.id} {sp.name}")
+            lines.append("")
+            for task in sp.tasks:
+                checkbox = _STATUS_TO_CHECKBOX[task.status]
+                lines.append(f"- [{checkbox}] {task.id} {task.description}")
+            lines.append("")
+    return "\n".join(lines)
