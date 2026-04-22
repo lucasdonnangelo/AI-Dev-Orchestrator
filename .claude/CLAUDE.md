@@ -52,7 +52,7 @@ Voce (task)
 ### [OK] Fase 6 — Orquestracao por Plano Hierarquico (COMPLETA)
 ### [>] Fase 7 — Dashboard para Execucao por Plano Hierarquico (EM ANDAMENTO)
 
-468 testes passando. 7.1.1 e 7.1.2 concluidas.
+493 testes passando. 7.1.1, 7.1.2 e 7.1.3 concluidas.
 
 Plano detalhado em: `docs/Fase7_Dashboard_Plano_Hierarquico.md`
 
@@ -87,6 +87,10 @@ Plano detalhado em: `docs/Fase7_Dashboard_Plano_Hierarquico.md`
 #### [OK] 7.1.2 — Endpoints REST para plan runner
 - `orchestrator/plan_runner.py` — `run_plan` aceita `event_bus` e `pause_event` opcionais; emite eventos em cada etapa; `_maybe_pause_boundaries` e async; pause semantica "after current task"
 - `orchestrator/server.py` — `PlanRunState` dataclass; `_active_plan_runs`; `_run_plan_bg`; 8 endpoints: POST/GET /api/plan/run, POST /api/plan/pause|resume|abort/{id}, GET /api/plan/load, POST /api/plan/generate, POST /api/plan/save
+
+#### [OK] 7.1.3 — WebSocket /ws/plan/{plan_run_id}
+- `orchestrator/server.py` — `_wait_for_plan_run`; `ws_plan`: history replay, streaming em tempo real, keepalive 30s, `{"action": "resume"}` desbloqueia pausa, `{"type": "done"}` em eventos terminais, cleanup de queue no finally
+- 25 novos testes: `TestPlanRunState`, `TestPlanRunStateCapture` (11 casos async via EventBus), `TestWebSocketPlanEndpoint` (8 casos WS)
 
 ## Estrutura do Projeto
 

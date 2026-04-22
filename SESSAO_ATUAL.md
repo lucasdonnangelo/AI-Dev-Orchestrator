@@ -1,6 +1,6 @@
 # Sessao Atual — AI Dev Orchestrator
 
-**Ultima atualizacao:** 22/04/2026 (Fase 7.1.1 e 7.1.2 concluidas)
+**Ultima atualizacao:** 22/04/2026 (Fase 7.1 completa — 7.1.1, 7.1.2 e 7.1.3 concluidas)
 **Branch:** main
 
 ---
@@ -60,46 +60,39 @@ Voce (task)
 | 6.5 — Geracao de Plano por IA | project_planner.py, plan_critic_system.md, orchestrate plan generate | COMPLETA |
 | 7.1.1 — Novos tipos de evento no EventBus | 11 EventTypes para plan runner em events.py | COMPLETA |
 | 7.1.2 — Endpoints REST para plan runner | PlanRunState, _run_plan_bg, 8 endpoints /api/plan/*, pause semantica "after current task" | COMPLETA |
+| 7.1.3 — WebSocket /ws/plan/{plan_run_id} | _wait_for_plan_run, ws_plan: history replay, streaming, keepalive, resume action, sentinel done | COMPLETA |
 
 ---
 
 ## Ultima tarefa aprovada
 
-**Tarefa:** Fase 7.1.2 — Endpoints REST para plan runner
+**Tarefa:** Fase 7.1.3 — WebSocket /ws/plan/{plan_run_id}
 **Commits relevantes:**
 - `e0a81dd` feat: Phase 7.1.1 - plan runner event types for hierarchical execution streaming
 - `7233669` feat: Phase 7.1.2 - plan run REST endpoints with pause/resume and event emission
+- `f1eebe3` feat: Phase 7.1 complete - WebSocket /ws/plan with history replay, pause/resume and keepalive
 
-**O que foi implementado (Fase 7.1):**
+**O que foi implementado (Fase 7.1.3):**
 
-**7.1.1 — Novos tipos de evento:**
-- `orchestrator/events.py` — 11 novos `EventType` com comentario de secao separado:
-  PLAN_LOADED, TASK_STARTED, TASK_DONE, TASK_ESCALATED, TASK_SKIPPED,
-  SUBPHASE_COMPLETE, PHASE_COMPLETE, PLAN_PAUSED, PLAN_RESUMED, PLAN_COMPLETE, PLAN_ABORTED
-- Docstring do modulo expandida com payload reference para cada tipo
-- 15 novos testes em `tests/test_events.py` (classe `TestPlanRunnerEvents`)
-
-**7.1.2 — Endpoints REST + mecanismo de pause:**
-- `orchestrator/plan_runner.py`:
-  - `run_plan` aceita `event_bus: EventBus | None` e `pause_event: asyncio.Event | None`
-  - Emite PLAN_LOADED, TASK_STARTED, TASK_DONE, TASK_ESCALATED, TASK_SKIPPED, PLAN_COMPLETE em pontos certos
-  - `_maybe_pause_boundaries` e async; em modo API emite SUBPHASE_COMPLETE/PHASE_COMPLETE + PLAN_PAUSED e aguarda `pause_event`
-  - Per-task pause check no topo do loop: POST /api/plan/pause/{id} pausa apos a task atual (nao apenas em boundaries naturais)
-  - Fix: `yes=True` nao bypassa mais o mecanismo de pause em modo API
 - `orchestrator/server.py`:
-  - `PlanRunState` — dataclass com event_bus, pause_event (inicia set), event_history, fan-out WS; subscriber `_on_plan_event` mantém status/current_task_id/pause_reason em sync
-  - `_active_plan_runs: dict[str, PlanRunState]`
-  - `_run_plan_bg` — background task; trata CancelledError -> PLAN_ABORTED
-  - Modelos Pydantic: `PlanRunRequest`, `PlanGenerateRequest`, `PlanSaveRequest`
-  - 8 endpoints: POST /api/plan/run, GET /api/plan/run/{id}, POST /api/plan/pause|resume|abort/{id}, GET /api/plan/load, POST /api/plan/generate, POST /api/plan/save
+  - `_wait_for_plan_run(plan_run_id, max_wait=5.0)` — mesmo padrao race-free do `_wait_for_run`
+  - `@app.websocket("/ws/plan/{plan_run_id}")` — handler completo:
+    - History replay ao conectar (snapshot + queue, sem gaps nem duplicatas)
+    - Streaming em tempo real via queue per-client com fan-out
+    - Keepalive `{"type": "ping", "plan_run_id": "..."}` a cada 30s
+    - Mensagem `{"type": "done", "plan_run_id": "..."}` em eventos terminais
+    - Client action `{"action": "resume"}` -> `state.pause_event.set()` desbloqueia pausa
+    - Erro `{"type": "error"}` + close 4004 se ID desconhecido apos 5s
+    - Cleanup de queue no finally (disconnect abrupto ou erro de rede)
+    - Suporte a multiplos clientes simultaneos no mesmo plan_run_id
+  - Docstring do modulo atualizado com nova rota WS
 
-**Semantica de pause (documentada para 7.1.3):**
-- `reason: "requested"` — usuario clicou Pausar; pausa antes da proxima task
-- `reason: "subphase"` — pausa automatica no fim de subfase
-- `reason: "phase"` — pausa automatica no fim de fase
-- Task em andamento nunca e interrompida; pause_event e verificado antes de iniciar a proxima
+**Testes adicionados (25 novos, total 493):**
+- `TestPlanRunState` (6): dataclass defaults, pause_event, event_bus, queues
+- `TestPlanRunStateCapture` (11, async): PLAN_LOADED, TASK_STARTED/DONE/ESCALATED/SKIPPED, PLAN_PAUSED/RESUMED, PLAN_COMPLETE/ABORTED, fan-out para multiplas queues
+- `TestWebSocketPlanEndpoint` (8): unknown ID->error, history replay, done em complete/aborted, done em historico vazio, cleanup de queue, done com plan_run_id, multiplos eventos em ordem
 
-- Total: 468 testes passando
+- Total: 493 testes passando
 
 ---
 
@@ -386,11 +379,10 @@ CycleRecord    -- task, status, plan, review, decision, attempt,
 
 ## Proximos passos imediatos
 
-**Fase 7 em andamento.** Proxima task: **7.1.3 — WebSocket `/ws/plan/{plan_run_id}`**
-- Streaming de eventos do plan runner em tempo real
-- History replay ao reconectar (mesmo padrao do /ws/run/{run_id})
-- Keepalive 30s
-- Suporte a mensagem `{ "action": "resume" }` do cliente para desbloquear pausa
+**Fase 7 em andamento. Sub-fase 7.1 completa.** Proxima task: **7.2.1 — Hook `usePlanSocket`**
+- Criar `dashboard/src/hooks/usePlanSocket.js`
+- Conectar ao `WS /ws/plan/{plan_run_id}` com reconexao automatica (5x / backoff 2s)
+- Expor: plan, status, currentTaskId, currentRunId, pauseReason, pauseContext, results, resume(), abort()
 
 Plano detalhado: `docs/Fase7_Dashboard_Plano_Hierarquico.md`
 
