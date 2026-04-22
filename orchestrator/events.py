@@ -11,19 +11,35 @@ and a ``data`` dict whose keys depend on the event type.
 
 Event payload reference
 -----------------------
-PLAN_STARTED        task
-PLAN_COMPLETED      task, plan (dict)
-CRITIC_ROUND        round, score, consensus, observations, suggestions
-CRITIC_CONSENSUS    round, score, plan (dict)
-EXECUTE_STARTED     attempt, max_attempts
-EXECUTE_COMPLETED   attempt, diff_lines
-REVIEW_STARTED      attempt
-REVIEW_COMPLETED    attempt, approved, score, issues_count
-DECISION_STARTED    (empty)
-DECISION_COMPLETED  approved, reasoning, inconsistencies
-CYCLE_APPROVED      task, attempt
-CYCLE_ESCALATED     task, reason
-TOKEN_USAGE         agent, input_tokens, output_tokens, cost_usd (all optional)
+Cycle events (single task execution):
+  PLAN_STARTED        task
+  PLAN_COMPLETED      task, plan (dict)
+  CRITIC_ROUND        round, score, consensus, observations, suggestions
+  CRITIC_CONSENSUS    round, score, plan (dict)
+  EXECUTE_STARTED     attempt, max_attempts
+  EXECUTE_COMPLETED   attempt, diff_lines
+  REVIEW_STARTED      attempt
+  REVIEW_COMPLETED    attempt, approved, score, issues_count
+  DECISION_STARTED    (empty)
+  DECISION_COMPLETED  approved, reasoning, inconsistencies
+  CYCLE_APPROVED      task, attempt
+  CYCLE_ESCALATED     task, reason
+  CYCLE_PAUSED        (empty)
+  CYCLE_RESUMED       (empty)
+  TOKEN_USAGE         agent, input_tokens, output_tokens, cost_usd (all optional)
+
+Plan runner events (hierarchical plan execution — Fase 7):
+  PLAN_LOADED         name, phases ([{id, name, task_count}]), total_tasks, done_tasks
+  TASK_STARTED        task_id, description, phase_id, subphase_id, attempt
+  TASK_DONE           task_id, commit_hash, score, duration_s
+  TASK_ESCALATED      task_id, reason
+  TASK_SKIPPED        task_id
+  SUBPHASE_COMPLETE   subphase_id, done, escalated, skipped, duration_s
+  PHASE_COMPLETE      phase_id, done, escalated, skipped, duration_s
+  PLAN_PAUSED         reason ("subphase" | "phase" | "escalation"), context (dict)
+  PLAN_RESUMED        (empty)
+  PLAN_COMPLETE       total, done, escalated, skipped, duration_s
+  PLAN_ABORTED        reason
 """
 
 from __future__ import annotations
@@ -41,6 +57,7 @@ from typing import Any, Callable
 # ---------------------------------------------------------------------------
 
 class EventType(str, Enum):
+    # --- single-cycle events ---
     PLAN_STARTED = "plan_started"
     PLAN_COMPLETED = "plan_completed"
     CRITIC_ROUND = "critic_round"
@@ -56,6 +73,19 @@ class EventType(str, Enum):
     CYCLE_PAUSED = "cycle_paused"
     CYCLE_RESUMED = "cycle_resumed"
     TOKEN_USAGE = "token_usage"
+
+    # --- plan runner events (Fase 7) ---
+    PLAN_LOADED = "plan_loaded"
+    TASK_STARTED = "task_started"
+    TASK_DONE = "task_done"
+    TASK_ESCALATED = "task_escalated"
+    TASK_SKIPPED = "task_skipped"
+    SUBPHASE_COMPLETE = "subphase_complete"
+    PHASE_COMPLETE = "phase_complete"
+    PLAN_PAUSED = "plan_paused"
+    PLAN_RESUMED = "plan_resumed"
+    PLAN_COMPLETE = "plan_complete"
+    PLAN_ABORTED = "plan_aborted"
 
 
 # ---------------------------------------------------------------------------

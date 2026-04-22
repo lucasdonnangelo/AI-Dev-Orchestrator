@@ -37,7 +37,7 @@ class TestEvent:
 # ---------------------------------------------------------------------------
 
 class TestEventType:
-    ALL_TYPES = [
+    CYCLE_TYPES = [
         "plan_started", "plan_completed",
         "critic_round", "critic_consensus",
         "execute_started", "execute_completed",
@@ -48,13 +48,45 @@ class TestEventType:
         "token_usage",
     ]
 
-    def test_all_types_exist(self):
+    PLAN_RUNNER_TYPES = [
+        "plan_loaded",
+        "task_started",
+        "task_done",
+        "task_escalated",
+        "task_skipped",
+        "subphase_complete",
+        "phase_complete",
+        "plan_paused",
+        "plan_resumed",
+        "plan_complete",
+        "plan_aborted",
+    ]
+
+    def test_all_cycle_types_exist(self):
         values = {e.value for e in EventType}
-        for t in self.ALL_TYPES:
+        for t in self.CYCLE_TYPES:
             assert t in values, f"Missing EventType: {t}"
+
+    def test_all_plan_runner_types_exist(self):
+        values = {e.value for e in EventType}
+        for t in self.PLAN_RUNNER_TYPES:
+            assert t in values, f"Missing plan runner EventType: {t}"
+
+    def test_total_type_count(self):
+        assert len(EventType) == len(self.CYCLE_TYPES) + len(self.PLAN_RUNNER_TYPES)
 
     def test_is_str_subclass(self):
         assert isinstance(EventType.PLAN_STARTED, str)
+
+    def test_plan_runner_types_are_str(self):
+        for et in [
+            EventType.PLAN_LOADED, EventType.TASK_STARTED, EventType.TASK_DONE,
+            EventType.TASK_ESCALATED, EventType.TASK_SKIPPED,
+            EventType.SUBPHASE_COMPLETE, EventType.PHASE_COMPLETE,
+            EventType.PLAN_PAUSED, EventType.PLAN_RESUMED,
+            EventType.PLAN_COMPLETE, EventType.PLAN_ABORTED,
+        ]:
+            assert isinstance(et, str)
 
 
 # ---------------------------------------------------------------------------
@@ -340,3 +372,171 @@ class TestPauseControllerCheckPause:
             await ctrl.check_pause()
 
         assert not ctrl.is_paused
+
+
+# ---------------------------------------------------------------------------
+# Plan runner event types — emit and payload round-trip
+# ---------------------------------------------------------------------------
+
+class TestPlanRunnerEvents:
+    """Verify each new plan-runner EventType can be emitted and received."""
+
+    @pytest.mark.asyncio
+    async def test_plan_loaded_event(self):
+        received: list[Event] = []
+        bus = EventBus()
+        bus.subscribe(received.append)
+
+        payload = {
+            "name": "MyProject",
+            "phases": [{"id": "1", "name": "Setup", "task_count": 3}],
+            "total_tasks": 3,
+            "done_tasks": 0,
+        }
+        await bus.emit(EventType.PLAN_LOADED, payload)
+
+        assert received[0].type == EventType.PLAN_LOADED
+        assert received[0].data["name"] == "MyProject"
+        assert received[0].data["total_tasks"] == 3
+
+    @pytest.mark.asyncio
+    async def test_task_started_event(self):
+        received: list[Event] = []
+        bus = EventBus()
+        bus.subscribe(received.append)
+
+        payload = {
+            "task_id": "1.1.1",
+            "description": "Create models",
+            "phase_id": "1",
+            "subphase_id": "1.1",
+            "attempt": 1,
+        }
+        await bus.emit(EventType.TASK_STARTED, payload)
+
+        assert received[0].type == EventType.TASK_STARTED
+        assert received[0].data["task_id"] == "1.1.1"
+        assert received[0].data["attempt"] == 1
+
+    @pytest.mark.asyncio
+    async def test_task_done_event(self):
+        received: list[Event] = []
+        bus = EventBus()
+        bus.subscribe(received.append)
+
+        payload = {"task_id": "1.1.1", "commit_hash": "abc1234", "score": 9, "duration_s": 42.0}
+        await bus.emit(EventType.TASK_DONE, payload)
+
+        assert received[0].type == EventType.TASK_DONE
+        assert received[0].data["commit_hash"] == "abc1234"
+        assert received[0].data["score"] == 9
+
+    @pytest.mark.asyncio
+    async def test_task_escalated_event(self):
+        received: list[Event] = []
+        bus = EventBus()
+        bus.subscribe(received.append)
+
+        await bus.emit(EventType.TASK_ESCALATED, {"task_id": "1.1.2", "reason": "max retries"})
+
+        assert received[0].type == EventType.TASK_ESCALATED
+        assert received[0].data["reason"] == "max retries"
+
+    @pytest.mark.asyncio
+    async def test_task_skipped_event(self):
+        received: list[Event] = []
+        bus = EventBus()
+        bus.subscribe(received.append)
+
+        await bus.emit(EventType.TASK_SKIPPED, {"task_id": "1.1.3"})
+
+        assert received[0].type == EventType.TASK_SKIPPED
+        assert received[0].data["task_id"] == "1.1.3"
+
+    @pytest.mark.asyncio
+    async def test_subphase_complete_event(self):
+        received: list[Event] = []
+        bus = EventBus()
+        bus.subscribe(received.append)
+
+        payload = {"subphase_id": "1.1", "done": 3, "escalated": 0, "skipped": 0, "duration_s": 120.5}
+        await bus.emit(EventType.SUBPHASE_COMPLETE, payload)
+
+        assert received[0].type == EventType.SUBPHASE_COMPLETE
+        assert received[0].data["done"] == 3
+
+    @pytest.mark.asyncio
+    async def test_phase_complete_event(self):
+        received: list[Event] = []
+        bus = EventBus()
+        bus.subscribe(received.append)
+
+        payload = {"phase_id": "1", "done": 6, "escalated": 1, "skipped": 0, "duration_s": 300.0}
+        await bus.emit(EventType.PHASE_COMPLETE, payload)
+
+        assert received[0].type == EventType.PHASE_COMPLETE
+        assert received[0].data["phase_id"] == "1"
+
+    @pytest.mark.asyncio
+    async def test_plan_paused_event(self):
+        received: list[Event] = []
+        bus = EventBus()
+        bus.subscribe(received.append)
+
+        payload = {"reason": "subphase", "context": {"done": 3, "commits": ["abc"]}}
+        await bus.emit(EventType.PLAN_PAUSED, payload)
+
+        assert received[0].type == EventType.PLAN_PAUSED
+        assert received[0].data["reason"] == "subphase"
+
+    @pytest.mark.asyncio
+    async def test_plan_resumed_event(self):
+        received: list[Event] = []
+        bus = EventBus()
+        bus.subscribe(received.append)
+
+        await bus.emit(EventType.PLAN_RESUMED, {})
+
+        assert received[0].type == EventType.PLAN_RESUMED
+        assert received[0].data == {}
+
+    @pytest.mark.asyncio
+    async def test_plan_complete_event(self):
+        received: list[Event] = []
+        bus = EventBus()
+        bus.subscribe(received.append)
+
+        payload = {"total": 10, "done": 9, "escalated": 1, "skipped": 0, "duration_s": 600.0}
+        await bus.emit(EventType.PLAN_COMPLETE, payload)
+
+        assert received[0].type == EventType.PLAN_COMPLETE
+        assert received[0].data["total"] == 10
+
+    @pytest.mark.asyncio
+    async def test_plan_aborted_event(self):
+        received: list[Event] = []
+        bus = EventBus()
+        bus.subscribe(received.append)
+
+        await bus.emit(EventType.PLAN_ABORTED, {"reason": "user cancelled"})
+
+        assert received[0].type == EventType.PLAN_ABORTED
+        assert received[0].data["reason"] == "user cancelled"
+
+    @pytest.mark.asyncio
+    async def test_plan_runner_events_carry_run_id(self):
+        received: list[Event] = []
+        bus = EventBus(run_id="plan-run-99")
+        bus.subscribe(received.append)
+
+        for et in [
+            EventType.PLAN_LOADED, EventType.TASK_STARTED, EventType.TASK_DONE,
+            EventType.TASK_ESCALATED, EventType.TASK_SKIPPED,
+            EventType.SUBPHASE_COMPLETE, EventType.PHASE_COMPLETE,
+            EventType.PLAN_PAUSED, EventType.PLAN_RESUMED,
+            EventType.PLAN_COMPLETE, EventType.PLAN_ABORTED,
+        ]:
+            await bus.emit(et, {})
+
+        assert all(e.run_id == "plan-run-99" for e in received)
+        assert len(received) == 11
