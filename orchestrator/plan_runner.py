@@ -13,7 +13,9 @@ Flow per task:
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -25,6 +27,7 @@ from rich.rule import Rule
 from orchestrator import git as git_helpers
 from orchestrator import logger as log_store
 from orchestrator.config import Config
+from orchestrator.events import EventBus, EventType
 from orchestrator.models import CycleStatus
 from orchestrator.orchestrator import run_cycle
 from orchestrator.plan import (
@@ -330,7 +333,21 @@ def _show_run_summary(result: RunPlanResult) -> None:
     console.print(Panel("\n".join(lines), title="Run summary", border_style=status_style))
 
 
-def _maybe_pause_boundaries(
+def _make_pause_context(
+    result: RunPlanResult,
+    id_prefix: str,
+) -> dict:
+    """Build the ``context`` dict included in PLAN_PAUSED events."""
+    relevant = [r for r in result.results if r.task_id.startswith(id_prefix)]
+    return {
+        "done": sum(1 for r in relevant if r.status in ("done", "already_done")),
+        "escalated": sum(1 for r in relevant if r.status == "escalated"),
+        "skipped": sum(1 for r in relevant if r.status == "skipped"),
+        "commits": [r.commit_hash for r in relevant if r.commit_hash],
+    }
+
+
+async def _maybe_pause_boundaries(
     task: PlanTask,
     ph: Phase,
     sp: SubPhase,
@@ -339,41 +356,105 @@ def _maybe_pause_boundaries(
     plan: ProjectPlan,
     result: RunPlanResult,
     options: RunPlanOptions,
+    *,
+    event_bus: EventBus | None = None,
+    pause_event: asyncio.Event | None = None,
+    phase_start: dict[str, float] | None = None,
+    subphase_start: dict[str, float] | None = None,
 ) -> None:
     """Pause for human confirmation at subphase / phase boundaries.
 
+    In CLI mode (pause_event is None) uses click.confirm.
+    In API mode (pause_event provided) emits PLAN_PAUSED and awaits resume.
     Raises :exc:`_StopExecution` when the user declines to continue.
-    Does nothing when ``auto_continue`` or ``yes`` is set.
+
+    Skips all pausing when ``auto_continue`` is set.
+    ``yes`` only suppresses CLI prompts — it does not bypass API-mode pauses.
     """
-    if options.auto_continue or options.yes:
+    if options.auto_continue:
+        return
+    # In CLI yes-mode, skip boundary pauses (same as before).
+    # In API mode (pause_event provided), always evaluate boundaries so the
+    # pause_event mechanism works regardless of the yes flag.
+    if options.yes and pause_event is None:
         return
 
     is_last_in_phase = last_in_phase.get(ph.id) == task.id
     is_last_in_subphase = last_in_subphase.get(sp.id) == task.id
 
+    now = time.monotonic()
+
     # Phase boundary takes priority over subphase boundary.
     if is_last_in_phase and options.pause_after_phase:
+        ph_duration = now - (phase_start or {}).get(ph.id, now)
+        all_ids = {t.id for t in ph.all_tasks}
+        ph_results = [r for r in result.results if r.task_id in all_ids]
+        if event_bus:
+            await event_bus.emit(EventType.PHASE_COMPLETE, {
+                "phase_id": ph.id,
+                "done": sum(1 for r in ph_results if r.status in ("done", "already_done")),
+                "escalated": sum(1 for r in ph_results if r.status == "escalated"),
+                "skipped": sum(1 for r in ph_results if r.status == "skipped"),
+                "duration_s": round(ph_duration, 1),
+            })
         _show_phase_summary(ph, result.results)
         next_phase = _next_phase(plan, ph.id)
         if next_phase:
-            if not click.confirm(
-                f"\nContinue to Phase {next_phase.id} — {next_phase.name}?",
-                default=True,
-            ):
-                console.print("[yellow]Execution stopped by user.[/yellow]")
-                raise _StopExecution()
+            if pause_event is not None:
+                ctx = _make_pause_context(result, f"{ph.id}.")
+                ctx["duration_s"] = round(ph_duration, 1)
+                pause_event.clear()
+                if event_bus:
+                    await event_bus.emit(EventType.PLAN_PAUSED, {"reason": "phase", "context": ctx})
+                try:
+                    await asyncio.wait_for(pause_event.wait(), timeout=1800.0)
+                except asyncio.TimeoutError:
+                    raise _StopExecution()
+                if event_bus:
+                    await event_bus.emit(EventType.PLAN_RESUMED, {})
+            else:
+                if not click.confirm(
+                    f"\nContinue to Phase {next_phase.id} — {next_phase.name}?",
+                    default=True,
+                ):
+                    console.print("[yellow]Execution stopped by user.[/yellow]")
+                    raise _StopExecution()
         return
 
     if is_last_in_subphase and options.pause_after_subtask:
+        sp_duration = now - (subphase_start or {}).get(sp.id, now)
+        sp_prefix = f"{sp.id}."
+        sp_results = [r for r in result.results if r.task_id.startswith(sp_prefix)]
+        if event_bus:
+            await event_bus.emit(EventType.SUBPHASE_COMPLETE, {
+                "subphase_id": sp.id,
+                "done": sum(1 for r in sp_results if r.status in ("done", "already_done")),
+                "escalated": sum(1 for r in sp_results if r.status == "escalated"),
+                "skipped": sum(1 for r in sp_results if r.status == "skipped"),
+                "duration_s": round(sp_duration, 1),
+            })
         _show_subphase_summary(sp, result.results)
         next_sp = _next_subphase(plan, sp.id)
         if next_sp:
-            if not click.confirm(
-                f"\nContinue to Subfase {next_sp.id} — {next_sp.name}?",
-                default=True,
-            ):
-                console.print("[yellow]Execution stopped by user.[/yellow]")
-                raise _StopExecution()
+            if pause_event is not None:
+                ctx = _make_pause_context(result, sp_prefix)
+                ctx["duration_s"] = round(sp_duration, 1)
+                pause_event.clear()
+                if event_bus:
+                    await event_bus.emit(EventType.PLAN_PAUSED, {"reason": "subphase", "context": ctx})
+                try:
+                    await asyncio.wait_for(pause_event.wait(), timeout=1800.0)
+                except asyncio.TimeoutError:
+                    raise _StopExecution()
+                if event_bus:
+                    await event_bus.emit(EventType.PLAN_RESUMED, {})
+            else:
+                if not click.confirm(
+                    f"\nContinue to Subfase {next_sp.id} — {next_sp.name}?",
+                    default=True,
+                ):
+                    console.print("[yellow]Execution stopped by user.[/yellow]")
+                    raise _StopExecution()
 
 
 # ---------------------------------------------------------------------------
@@ -385,6 +466,9 @@ async def run_plan(  # noqa: C901
     plan_path: str | Path,
     config: Config,
     options: RunPlanOptions | None = None,
+    *,
+    event_bus: EventBus | None = None,
+    pause_event: asyncio.Event | None = None,
 ) -> RunPlanResult:
     """Execute tasks from PLANO.md sequentially through the full agent cycle.
 
@@ -437,6 +521,26 @@ async def run_plan(  # noqa: C901
     last_in_subphase = {sid: _last_task_in_subphase(entries, sid) for sid in subphase_ids}
     last_in_phase = {pid: _last_task_in_phase(entries, pid) for pid in phase_ids}
 
+    # Timing accumulators.
+    _plan_start = time.monotonic()
+    _phase_start: dict[str, float] = {}
+    _subphase_start: dict[str, float] = {}
+
+    # Emit PLAN_LOADED so the API/WS layer knows the plan structure upfront.
+    if event_bus:
+        phases_info = [
+            {"id": ph.id, "name": ph.name, "task_count": len(ph.all_tasks)}
+            for ph in plan.phases
+        ]
+        total_tasks = sum(len(ph.all_tasks) for ph in plan.phases)
+        done_tasks = sum(1 for ph in plan.phases for t in ph.all_tasks if t.is_done)
+        await event_bus.emit(EventType.PLAN_LOADED, {
+            "name": plan.name,
+            "phases": phases_info,
+            "total_tasks": total_tasks,
+            "done_tasks": done_tasks,
+        })
+
     # --- dry run ---
     if options.dry_run:
         console.print(Panel(
@@ -465,8 +569,40 @@ async def run_plan(  # noqa: C901
 
     console.print(Panel(f"[bold]{plan.name}[/bold]", title="Plan Runner", border_style="blue"))
 
+    _boundary_kwargs: dict = {
+        "event_bus": event_bus,
+        "pause_event": pause_event,
+        "phase_start": _phase_start,
+        "subphase_start": _subphase_start,
+    }
+
     try:
         for ph, sp, task in entries:
+
+            # Track start times for the first task in each phase/subphase.
+            now = time.monotonic()
+            _phase_start.setdefault(ph.id, now)
+            _subphase_start.setdefault(sp.id, now)
+
+            # ---- API per-task pause check -------------------------------------------
+            # In API mode, check pause_event BEFORE starting each task so that
+            # POST /api/plan/pause/{id} takes effect "after the current task" rather
+            # than only at natural subphase/phase boundaries.
+            # Skipped in CLI mode (pause_event is None) and auto_continue mode.
+            if pause_event is not None and not options.auto_continue:
+                if not pause_event.is_set():
+                    ctx: dict = _make_pause_context(result, "")
+                    if event_bus:
+                        await event_bus.emit(EventType.PLAN_PAUSED, {
+                            "reason": "requested",
+                            "context": ctx,
+                        })
+                    try:
+                        await asyncio.wait_for(pause_event.wait(), timeout=1800.0)
+                    except asyncio.TimeoutError:
+                        raise _StopExecution()
+                    if event_bus:
+                        await event_bus.emit(EventType.PLAN_RESUMED, {})
 
             # ---- skip terminal tasks ------------------------------------------------
 
@@ -480,7 +616,12 @@ async def run_plan(  # noqa: C901
                     task_id=task.id, description=task.description,
                     status="already_done", commit_hash=task.commit_hash,
                 ))
-                _maybe_pause_boundaries(task, ph, sp, last_in_subphase, last_in_phase, plan, result, options)
+                if event_bus:
+                    await event_bus.emit(EventType.TASK_SKIPPED, {"task_id": task.id})
+                await _maybe_pause_boundaries(
+                    task, ph, sp, last_in_subphase, last_in_phase, plan, result, options,
+                    **_boundary_kwargs,
+                )
                 continue
 
             if task.status == PlanTaskStatus.SKIPPED:
@@ -492,7 +633,12 @@ async def run_plan(  # noqa: C901
                 result.results.append(TaskResult(
                     task_id=task.id, description=task.description, status="skipped",
                 ))
-                _maybe_pause_boundaries(task, ph, sp, last_in_subphase, last_in_phase, plan, result, options)
+                if event_bus:
+                    await event_bus.emit(EventType.TASK_SKIPPED, {"task_id": task.id})
+                await _maybe_pause_boundaries(
+                    task, ph, sp, last_in_subphase, last_in_phase, plan, result, options,
+                    **_boundary_kwargs,
+                )
                 continue
 
             # ---- previously escalated ----------------------------------------------
@@ -508,7 +654,12 @@ async def run_plan(  # noqa: C901
                     result.results.append(TaskResult(
                         task_id=task.id, description=task.description, status="skipped",
                     ))
-                    _maybe_pause_boundaries(task, ph, sp, last_in_subphase, last_in_phase, plan, result, options)
+                    if event_bus:
+                        await event_bus.emit(EventType.TASK_SKIPPED, {"task_id": task.id})
+                    await _maybe_pause_boundaries(
+                        task, ph, sp, last_in_subphase, last_in_phase, plan, result, options,
+                        **_boundary_kwargs,
+                    )
                     continue
 
                 action = click.prompt(
@@ -525,7 +676,12 @@ async def run_plan(  # noqa: C901
                     result.results.append(TaskResult(
                         task_id=task.id, description=task.description, status="skipped",
                     ))
-                    _maybe_pause_boundaries(task, ph, sp, last_in_subphase, last_in_phase, plan, result, options)
+                    if event_bus:
+                        await event_bus.emit(EventType.TASK_SKIPPED, {"task_id": task.id})
+                    await _maybe_pause_boundaries(
+                        task, ph, sp, last_in_subphase, last_in_phase, plan, result, options,
+                        **_boundary_kwargs,
+                    )
                     continue
                 # "retry" — reset to pending and fall through to execution
                 task.reset()
@@ -536,6 +692,16 @@ async def run_plan(  # noqa: C901
             console.print(Rule(f"[bold]{task.id}[/bold]  {task.description[:80]}", style="blue"))
             if not options.quiet:
                 console.print(f"  [dim]Phase {ph.id} — {ph.name}  >  {sp.id} {sp.name}[/dim]")
+
+            if event_bus:
+                await event_bus.emit(EventType.TASK_STARTED, {
+                    "task_id": task.id,
+                    "description": task.description,
+                    "phase_id": ph.id,
+                    "subphase_id": sp.id,
+                    "attempt": 1,
+                })
+            _task_start = time.monotonic()
 
             # Build accumulated context from completed tasks in the same phase (6.2/6.3)
             phase_ctx = _build_phase_context(plan, task, project_dir=config.project_dir)
@@ -566,10 +732,17 @@ async def run_plan(  # noqa: C901
                     task_id=task.id, description=task.description,
                     status="escalated", error=str(exc),
                 ))
+                if event_bus:
+                    await event_bus.emit(EventType.TASK_ESCALATED, {
+                        "task_id": task.id, "reason": str(exc),
+                    })
                 if not options.yes:
                     if not click.confirm("  Continue with next task?", default=False):
                         raise _StopExecution() from exc
-                _maybe_pause_boundaries(task, ph, sp, last_in_subphase, last_in_phase, plan, result, options)
+                await _maybe_pause_boundaries(
+                    task, ph, sp, last_in_subphase, last_in_phase, plan, result, options,
+                    **_boundary_kwargs,
+                )
                 continue
 
             # ---- escalation ---------------------------------------------------------
@@ -585,11 +758,18 @@ async def run_plan(  # noqa: C901
                 result.results.append(TaskResult(
                     task_id=task.id, description=task.description, status="escalated",
                 ))
+                if event_bus:
+                    await event_bus.emit(EventType.TASK_ESCALATED, {
+                        "task_id": task.id, "reason": "max retries exceeded",
+                    })
                 if not options.yes:
                     if not click.confirm("  Continue with next task?", default=False):
                         console.print("[yellow]Execution paused — manual intervention required.[/yellow]")
                         raise _StopExecution()
-                _maybe_pause_boundaries(task, ph, sp, last_in_subphase, last_in_phase, plan, result, options)
+                await _maybe_pause_boundaries(
+                    task, ph, sp, last_in_subphase, last_in_phase, plan, result, options,
+                    **_boundary_kwargs,
+                )
                 continue
 
             # ---- approved — commit --------------------------------------------------
@@ -616,16 +796,37 @@ async def run_plan(  # noqa: C901
             write_plan(plan, plan_path)
             log_store.save(record, diff, config.log_dir)
 
+            _task_duration = round(time.monotonic() - _task_start, 1)
             result.tasks_done += 1
             result.results.append(TaskResult(
                 task_id=task.id, description=task.description,
                 status="done", commit_hash=commit_hash,
             ))
+            if event_bus:
+                score = record.review.score if record.review else None
+                await event_bus.emit(EventType.TASK_DONE, {
+                    "task_id": task.id,
+                    "commit_hash": commit_hash,
+                    "score": score,
+                    "duration_s": _task_duration,
+                })
 
-            _maybe_pause_boundaries(task, ph, sp, last_in_subphase, last_in_phase, plan, result, options)
+            await _maybe_pause_boundaries(
+                task, ph, sp, last_in_subphase, last_in_phase, plan, result, options,
+                **_boundary_kwargs,
+            )
 
     except _StopExecution:
         pass
+
+    if event_bus:
+        await event_bus.emit(EventType.PLAN_COMPLETE, {
+            "total": result.total_processed,
+            "done": result.tasks_done,
+            "escalated": result.tasks_escalated,
+            "skipped": result.tasks_skipped,
+            "duration_s": round(time.monotonic() - _plan_start, 1),
+        })
 
     _show_run_summary(result)
     return result

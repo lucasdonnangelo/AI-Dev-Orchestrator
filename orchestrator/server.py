@@ -1,7 +1,7 @@
 """FastAPI backend for the AI Dev Orchestrator dashboard.
 
 Exposes the orchestrator as a local HTTP service with REST endpoints and
-(in Phase 5.1.3) WebSocket streaming.
+WebSocket streaming.
 
 Endpoints
 ---------
@@ -18,6 +18,16 @@ GET    /api/metrics              Return aggregated metrics
 GET    /api/templates            List available project templates
 POST   /api/init                 Create a project from a template
 GET    /api/health               Health check
+
+Plan runner endpoints (Fase 7):
+POST   /api/plan/run             Start hierarchical plan execution
+GET    /api/plan/run/{id}        State of a plan run
+POST   /api/plan/pause/{id}      Signal pause at next task boundary
+POST   /api/plan/resume/{id}     Resume a paused plan run
+POST   /api/plan/abort/{id}      Abort a plan run
+GET    /api/plan/load            Parse PLANO.md from a project and return it
+POST   /api/plan/generate        Generate PLANO.md via AI + Critic loop
+POST   /api/plan/save            Save PLANO.md content to a project
 """
 
 from __future__ import annotations
@@ -39,11 +49,15 @@ from pydantic import BaseModel
 
 from orchestrator import logger as log_store
 from orchestrator import orchestrator as orch
+from orchestrator import plan_runner as plan_runner_mod
 from orchestrator import templates as tmpl
 from orchestrator.config import Config
 from orchestrator.context import build_tree, detect_stack, load_readme
 from orchestrator.events import Event, EventBus, EventType, PauseController
 from orchestrator.models import CycleRecord
+from orchestrator.plan import ProjectPlan, parse_plan
+from orchestrator.plan_runner import RunPlanOptions, TaskResult
+from orchestrator.project_planner import generate_project_plan, run_project_plan_critic_loop
 
 # ---------------------------------------------------------------------------
 # Prompt paths (used by resolved-config endpoint)
@@ -127,6 +141,79 @@ class RunState:
 _active_runs: dict[str, RunState] = {}
 
 
+# ---------------------------------------------------------------------------
+# Plan runner state (Fase 7)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PlanRunState:
+    """Tracks a hierarchical plan run (run_plan) initiated via the API."""
+
+    id: str
+    project_id: str
+    project_path: str
+    plan_path: str
+    status: str = "running"   # running | paused | complete | aborted | error
+    started_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    finished_at: str | None = None
+    plan_name: str = ""
+    current_task_id: str | None = None
+    pause_reason: str | None = None
+    pause_context: dict[str, Any] | None = None
+    error: str | None = None
+    tasks_done: int = 0
+    tasks_escalated: int = 0
+    tasks_skipped: int = 0
+    results: list[TaskResult] = field(default_factory=list)
+    bg_task: asyncio.Task | None = None  # type: ignore[type-arg]
+    event_bus: EventBus = field(default_factory=EventBus)
+    pause_event: asyncio.Event = field(default_factory=asyncio.Event)
+    event_history: list[dict[str, Any]] = field(
+        default_factory=list, init=False, repr=False, compare=False
+    )
+    _client_queues: list[asyncio.Queue[dict[str, Any] | None]] = field(
+        default_factory=list, init=False, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        self.event_bus.run_id = self.id
+        self.pause_event.set()  # starts as "not paused"
+        self.event_bus.subscribe(self._on_plan_event)
+
+    def _on_plan_event(self, event: Event) -> None:
+        evt_dict = event.to_dict()
+        self.event_history.append(evt_dict)
+        for q in list(self._client_queues):
+            q.put_nowait(evt_dict)
+
+        if event.type == EventType.PLAN_LOADED:
+            self.plan_name = event.data.get("name", "")
+        elif event.type == EventType.TASK_STARTED:
+            self.current_task_id = event.data.get("task_id")
+        elif event.type in (EventType.TASK_DONE, EventType.TASK_ESCALATED, EventType.TASK_SKIPPED):
+            self.current_task_id = None
+            if event.type == EventType.TASK_DONE:
+                self.tasks_done += 1
+            elif event.type == EventType.TASK_ESCALATED:
+                self.tasks_escalated += 1
+            else:
+                self.tasks_skipped += 1
+        elif event.type == EventType.PLAN_PAUSED:
+            self.status = "paused"
+            self.pause_reason = event.data.get("reason")
+            self.pause_context = event.data.get("context")
+        elif event.type == EventType.PLAN_RESUMED:
+            self.status = "running"
+            self.pause_reason = None
+            self.pause_context = None
+        elif event.type in (EventType.PLAN_COMPLETE, EventType.PLAN_ABORTED):
+            for q in list(self._client_queues):
+                q.put_nowait(None)  # terminal sentinel for WS clients
+
+
+_active_plan_runs: dict[str, PlanRunState] = {}
+
+
 async def _wait_for_run(run_id: str, *, max_wait: float = 5.0) -> RunState | None:
     """Poll _active_runs until *run_id* appears or *max_wait* seconds elapse.
 
@@ -198,6 +285,30 @@ class ConfigParseRequest(BaseModel):
     content: str
 
 
+class PlanRunRequest(BaseModel):
+    project_id: str
+    plan_path: str = "PLANO.md"       # relative to project dir
+    phase: str | None = None
+    subtask: str | None = None
+    auto_continue: bool = False
+    pause_after_subtask: bool = True
+    pause_after_phase: bool = True
+
+
+class PlanGenerateRequest(BaseModel):
+    project_id: str
+    description: str
+    premises: str = ""
+    stack: str = ""
+    run_critic: bool = True
+
+
+class PlanSaveRequest(BaseModel):
+    project_id: str
+    content: str
+    plan_path: str = "PLANO.md"
+
+
 # ---------------------------------------------------------------------------
 # Background task helpers
 # ---------------------------------------------------------------------------
@@ -256,6 +367,36 @@ async def _run_batch_bg(
     if batch_state.status == "running":
         batch_state.status = "completed"
         batch_state.finished_at = datetime.now().isoformat()
+
+
+# ---------------------------------------------------------------------------
+# Plan runner background task (Fase 7)
+# ---------------------------------------------------------------------------
+
+async def _run_plan_bg(state: PlanRunState, options: RunPlanOptions) -> None:
+    """Execute run_plan in the background, updating PlanRunState as events arrive."""
+    try:
+        config = Config.load(state.project_path)
+        run_result = await plan_runner_mod.run_plan(
+            state.plan_path,
+            config,
+            options,
+            event_bus=state.event_bus,
+            pause_event=state.pause_event,
+        )
+        state.results = run_result.results
+        state.status = "complete"
+        state.finished_at = datetime.now().isoformat()
+    except asyncio.CancelledError:
+        state.status = "aborted"
+        state.finished_at = datetime.now().isoformat()
+        await state.event_bus.emit(EventType.PLAN_ABORTED, {"reason": "user cancelled"})
+        raise
+    except Exception as exc:  # noqa: BLE001
+        state.status = "error"
+        state.error = str(exc)
+        state.finished_at = datetime.now().isoformat()
+        await state.event_bus.emit(EventType.PLAN_ABORTED, {"reason": str(exc)})
 
 
 # ---------------------------------------------------------------------------
@@ -514,6 +655,227 @@ async def get_batch(batch_id: str) -> dict[str, Any]:
         "tasks": tasks,
     }
 
+
+# ---------------------------------------------------------------------------
+# Plan runner endpoints (Fase 7)
+# ---------------------------------------------------------------------------
+
+def _get_plan_run_or_404(plan_run_id: str) -> PlanRunState:
+    state = _active_plan_runs.get(plan_run_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"Plan run '{plan_run_id}' not found")
+    return state
+
+
+@app.post("/api/plan/run", status_code=202)
+async def start_plan_run(req: PlanRunRequest) -> dict[str, Any]:
+    """Start a hierarchical plan execution in the background.
+
+    Reads ``PLANO.md`` from the project directory and runs each pending task
+    through the full agent cycle.  Returns a ``plan_run_id`` immediately;
+    poll ``GET /api/plan/run/{id}`` or connect to ``WS /ws/plan/{id}`` for
+    progress.
+    """
+    project = _get_project_or_404(req.project_id)
+    project_path = project["path"]
+    abs_plan = str(Path(project_path) / req.plan_path)
+
+    if not Path(abs_plan).exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"PLANO.md not found at '{abs_plan}'. Run 'plan generate' first.",
+        )
+
+    plan_run_id = str(uuid.uuid4())
+    state = PlanRunState(
+        id=plan_run_id,
+        project_id=req.project_id,
+        project_path=project_path,
+        plan_path=abs_plan,
+    )
+    _active_plan_runs[plan_run_id] = state
+
+    options = RunPlanOptions(
+        phase=req.phase,
+        subtask=req.subtask,
+        auto_continue=req.auto_continue,
+        pause_after_subtask=req.pause_after_subtask,
+        pause_after_phase=req.pause_after_phase,
+        yes=True,   # skip click.confirm prompts (commits handled automatically)
+    )
+    state.bg_task = asyncio.create_task(_run_plan_bg(state, options))
+
+    return {"plan_run_id": plan_run_id, "status": "running", "message": "Plan execution started"}
+
+
+@app.get("/api/plan/run/{plan_run_id}")
+async def get_plan_run(plan_run_id: str) -> dict[str, Any]:
+    """Return the current state of a plan run."""
+    state = _get_plan_run_or_404(plan_run_id)
+    return {
+        "plan_run_id": state.id,
+        "project_id": state.project_id,
+        "plan_name": state.plan_name,
+        "status": state.status,
+        "current_task_id": state.current_task_id,
+        "pause_reason": state.pause_reason,
+        "pause_context": state.pause_context,
+        "tasks_done": state.tasks_done,
+        "tasks_escalated": state.tasks_escalated,
+        "tasks_skipped": state.tasks_skipped,
+        "started_at": state.started_at,
+        "finished_at": state.finished_at,
+        "error": state.error,
+    }
+
+
+@app.post("/api/plan/pause/{plan_run_id}")
+async def pause_plan_run(plan_run_id: str) -> dict[str, Any]:
+    """Signal the plan runner to pause at the next task boundary.
+
+    The runner will pause after completing its current task.  Call
+    ``POST /api/plan/resume/{id}`` to continue.
+    """
+    state = _get_plan_run_or_404(plan_run_id)
+    if state.status not in ("running",):
+        return {"plan_run_id": plan_run_id, "status": state.status, "message": "Plan run is not active"}
+
+    # Clear the pause_event so the runner blocks at the next boundary.
+    state.pause_event.clear()
+    # The status will transition to "paused" when PLAN_PAUSED is emitted.
+    return {"plan_run_id": plan_run_id, "status": state.status, "message": "Pause requested at next boundary"}
+
+
+@app.post("/api/plan/resume/{plan_run_id}")
+async def resume_plan_run(plan_run_id: str) -> dict[str, Any]:
+    """Resume a paused plan run."""
+    state = _get_plan_run_or_404(plan_run_id)
+    if state.status != "paused":
+        return {"plan_run_id": plan_run_id, "status": state.status, "message": "Plan run is not paused"}
+
+    state.pause_event.set()
+    # status will update to "running" when PLAN_RESUMED is emitted
+    return {"plan_run_id": plan_run_id, "status": "running", "message": "Plan run resumed"}
+
+
+@app.post("/api/plan/abort/{plan_run_id}")
+async def abort_plan_run(plan_run_id: str) -> dict[str, Any]:
+    """Abort an active (running or paused) plan run."""
+    state = _get_plan_run_or_404(plan_run_id)
+    if state.status not in ("running", "paused"):
+        return {"plan_run_id": plan_run_id, "status": state.status, "message": "Plan run is not active"}
+
+    # Unblock any pending pause so the background task can reach a cancellation point.
+    state.pause_event.set()
+    if state.bg_task and not state.bg_task.done():
+        state.bg_task.cancel()
+
+    state.status = "aborted"
+    state.finished_at = datetime.now().isoformat()
+    return {"plan_run_id": plan_run_id, "status": "aborted", "message": "Plan run aborted"}
+
+
+@app.get("/api/plan/load")
+async def load_plan(project_id: str, plan_path: str = "PLANO.md") -> dict[str, Any]:
+    """Parse PLANO.md from a project and return its structure.
+
+    Returns the plan hierarchy (phases → subphases → tasks) with status of
+    each task so the frontend can render the plan tree without starting a run.
+    """
+    project = _get_project_or_404(project_id)
+    abs_plan = Path(project["path"]) / plan_path
+
+    if not abs_plan.exists():
+        raise HTTPException(status_code=404, detail=f"'{plan_path}' not found in project")
+
+    try:
+        plan = parse_plan(abs_plan)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"Failed to parse plan: {exc}")
+
+    def _serialise_plan(p: ProjectPlan) -> dict[str, Any]:
+        return {
+            "name": p.name,
+            "phases": [
+                {
+                    "id": ph.id,
+                    "name": ph.name,
+                    "subphases": [
+                        {
+                            "id": sp.id,
+                            "name": sp.name,
+                            "tasks": [
+                                {
+                                    "id": t.id,
+                                    "description": t.description,
+                                    "status": t.status.value,
+                                    "commit_hash": t.commit_hash,
+                                }
+                                for t in sp.tasks
+                            ],
+                        }
+                        for sp in ph.subphases
+                    ],
+                    "task_count": len(ph.all_tasks),
+                    "done_count": sum(1 for t in ph.all_tasks if t.is_done),
+                }
+                for ph in p.phases
+            ],
+            "total_tasks": sum(len(ph.all_tasks) for ph in p.phases),
+            "done_tasks": sum(1 for ph in p.phases for t in ph.all_tasks if t.is_done),
+        }
+
+    return _serialise_plan(plan)
+
+
+@app.post("/api/plan/generate", status_code=202)
+async def generate_plan(req: PlanGenerateRequest) -> dict[str, Any]:
+    """Generate a PLANO.md via AI and optionally refine it with the Critic loop.
+
+    Returns the generated Markdown and the parsed plan structure so the
+    frontend can display a preview before saving.
+    """
+    project = _get_project_or_404(req.project_id)
+
+    try:
+        config = Config.load(project["path"])
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Failed to load config: {exc}")
+
+    try:
+        raw_md, plan = await generate_project_plan(
+            req.description, config, premises=req.premises, stack=req.stack
+        )
+        if req.run_critic:
+            raw_md, plan = await run_project_plan_critic_loop(
+                req.description, raw_md, plan, config,
+                premises=req.premises, stack=req.stack,
+            )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Plan generation failed: {exc}")
+
+    return {
+        "raw_md": raw_md,
+        "plan": {
+            "name": plan.name,
+            "phase_count": len(plan.phases),
+            "task_count": sum(len(ph.all_tasks) for ph in plan.phases),
+        },
+    }
+
+
+@app.post("/api/plan/save")
+async def save_plan(req: PlanSaveRequest) -> dict[str, Any]:
+    """Write PLANO.md content to the project directory."""
+    project = _get_project_or_404(req.project_id)
+    target = Path(project["path"]) / req.plan_path
+
+    try:
+        target.write_text(req.content, encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to save plan: {exc}")
+
+    return {"saved": True, "path": str(target)}
 
 
 
