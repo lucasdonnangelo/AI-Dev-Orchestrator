@@ -135,11 +135,35 @@ def _commit_task(project_dir: str, message: str) -> str | None:
         return None
 
 
-def _build_phase_context(plan: ProjectPlan, current_task: PlanTask) -> str:
+def _get_commit_files(project_dir: str, commit_hash: str) -> list[str]:
+    """Return the list of files touched by *commit_hash* (empty on any error)."""
+    try:
+        result = subprocess.run(
+            ["git", "diff-tree", "--no-commit-id", "-r", "--name-only", commit_hash],
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+        )
+        return [f for f in result.stdout.splitlines() if f]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _build_phase_context(
+    plan: ProjectPlan,
+    current_task: PlanTask,
+    project_dir: str | None = None,
+) -> str:
     """Return a Markdown string summarising completed tasks in the current phase.
 
-    Prepended to the task description so the Planner and Critic have full
-    context of what was already implemented before planning the next step.
+    Prepended to the task description so the Planner has full context of what
+    was already implemented.  Also passed separately to the Critic so it can
+    evaluate cross-task coherence (6.3).
+
+    When *project_dir* is provided and a task has a commit hash, the list of
+    files touched by that commit is included so the Critic can detect overlap
+    or conflicts with the new plan.
+
     Returns an empty string when no tasks have been completed yet.
     """
     current_phase: Phase | None = None
@@ -175,6 +199,11 @@ def _build_phase_context(plan: ProjectPlan, current_task: PlanTask) -> str:
             for t in done_in_sp:
                 commit_note = f" (commit: {t.commit_hash})" if t.commit_hash else ""
                 lines.append(f"- [x] {t.id} {t.description}{commit_note}")
+                if project_dir and t.commit_hash:
+                    files = _get_commit_files(project_dir, t.commit_hash)
+                    if files:
+                        for f in files:
+                            lines.append(f"  - {f}")
             lines.append("")
 
     lines.append("---")
@@ -505,8 +534,8 @@ async def run_plan(  # noqa: C901
             if not options.quiet:
                 console.print(f"  [dim]Phase {ph.id} — {ph.name}  >  {sp.id} {sp.name}[/dim]")
 
-            # Build accumulated context from completed tasks in the same phase (6.2.2)
-            phase_ctx = _build_phase_context(plan, task)
+            # Build accumulated context from completed tasks in the same phase (6.2/6.3)
+            phase_ctx = _build_phase_context(plan, task, project_dir=config.project_dir)
             if phase_ctx:
                 full_task = (
                     f"{phase_ctx}"
@@ -520,7 +549,9 @@ async def run_plan(  # noqa: C901
             write_plan(plan, plan_path)
 
             try:
-                record, diff, _ = await run_cycle(full_task, config)
+                record, diff, _ = await run_cycle(
+                    full_task, config, phase_context=phase_ctx or None
+                )
             except Exception as exc:  # noqa: BLE001
                 console.print(
                     f"  [red]ERROR[/red] Unexpected error while executing task {task.id}: {exc}"
