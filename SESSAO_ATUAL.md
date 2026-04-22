@@ -1,6 +1,6 @@
 # Sessao Atual — AI Dev Orchestrator
 
-**Ultima atualizacao:** 15/04/2026 (Fase 6.2.1 concluida — iniciando Fase 6.2 restante / 6.3)
+**Ultima atualizacao:** 22/04/2026 (Fases 6.3 e 6.4 concluidas — iniciando 6.5)
 **Branch:** main
 
 ---
@@ -11,8 +11,9 @@
 Voce (task)
   --> context.load_project_context()              [stack, README, arvore de dirs]
   --> Planner (Claude) gera plano v1              [recebe session_context + project_ctx]
-  --> Critico (Gemini) avalia [min 2, max 5 rounds]  [recebe session_context]
+  --> Critico (Gemini) avalia [min 2, max 5 rounds]  [recebe session_context + phase_context]
         se nao consenso: Planner refina --> Critico reavalia
+        phase_context: tasks concluidas na mesma fase + arquivos modificados por commit
   --> Plano Final
   --> Executor (Claude Agent SDK) implementa      [roda em thread separada via asyncio.to_thread]
         se reprovado (max 3x): Executor corrige com feedback
@@ -54,33 +55,39 @@ Voce (task)
 | 5.5 — Frontend Historico e Metricas | graficos, diff viewer avancado, detalhes de ciclo | COMPLETA |
 | 6.1 — Parser e Modelo de Dados | plan.py (ProjectPlan/Phase/SubPhase/PlanTask), parse_plan, write_plan, CLI plan status/next/reset | COMPLETA |
 | 6.2 — Motor de Execucao por Plano | plan_runner.py, run_plan, contexto acumulado, pausa, retomada | COMPLETA |
-| 6.3 — Critic de Coerencia Entre Tasks | phase_context no critic, critic_system.md atualizado | PROXIMA |
-| 6.4 — Comando CLI Principal | orchestrate plan run (--phase/--subtask/--auto/--dry-run), output visual | PENDENTE |
-| 6.5 — Geracao de Plano por IA | project_planner.py, orchestrate plan generate | PENDENTE |
+| 6.3 — Critic de Coerencia Entre Tasks | phase_context no critic, critic_system.md atualizado | COMPLETA |
+| 6.4 — Comando CLI Principal | orchestrate plan run (--phase/--subtask/--auto/--dry-run), output visual | COMPLETA |
+| 6.5 — Geracao de Plano por IA | project_planner.py, orchestrate plan generate | PROXIMA |
 
 ---
 
 ## Ultima tarefa aprovada
 
-**Tarefa:** Fase 6.2.1 — Motor de Execucao por Plano
+**Tarefa:** Fase 6.4 — Comando CLI Principal (plan run)
 **Commits relevantes:**
-- `07d8e78` feat: Phase 6.2 complete - plan execution engine with context, pause and resume
+- `db1aff3` feat: Phase 6.3.1 - phase context injection in Critic for cross-task coherence
+- `e42368c` feat: Phase 6.3 complete - Critic receives accumulated phase context with modified files per task
+- `39569f5` feat: Phase 6.4 complete - orchestrate plan run command with visual progress display
 
-**O que foi implementado (Fase 6.2):**
-- `orchestrator/plan_runner.py` — modulo completo com:
-  - `RunPlanOptions` — filtros (phase/subtask), modos (dry_run/auto_continue), pausas configuráveis, flags (yes/quiet/verbose)
-  - `TaskResult` / `RunPlanResult` — resultado por task e agregado com propriedades (success, total_processed)
-  - `run_plan(plan_path, config, options)` — loop assincrono principal:
-    - Pula tasks done/skipped silenciosamente (idempotencia)
-    - Tasks escalated: prompt retry/skip/abort
-    - Marca running -> executa run_cycle -> marca done/escalated -> persiste PLANO.md apos cada estado
-    - Contexto acumulado da fase injetado no argumento task (nao acopla planner.py)
-    - Pausas ao fim de subfase e fase com confirmacao humana e resumo visual
-    - _StopExecution para interrompimento limpo sem encerrar o processo
-  - `_build_phase_context(plan, task)` — gera Markdown com tasks concluidas na mesma fase
-  - Helpers: boundary detection, display de summaries (subfase, fase, geral)
-- `orchestrator/plan.py` — fix: parser agora reconhece `[-]` como SKIPPED (roundtrip consistente)
-- `tests/test_plan_runner.py` — 32 testes (RunPlanResult, filtros, boundaries, contexto, dry_run, idempotencia, execucao, escalacao)
+**O que foi implementado (Fase 6.3):**
+- `orchestrator/critic.py` — `critique_plan` e `run_critic_loop` aceitam `phase_context: str | None`
+  - Quando fornecido, injetado no prompt como `## Phase Context (tasks already completed in this phase)`
+- `orchestrator/orchestrator.py` — `run_cycle` aceita `phase_context` e propaga para `run_critic_loop`
+- `orchestrator/prompts/critic_system.md` — novo criterio **Coherence**: detecta conflitos/duplicacoes com tasks anteriores da mesma fase
+- `orchestrator/plan_runner.py`:
+  - `_get_commit_files(project_dir, commit_hash)` — lista arquivos tocados por commit via `git diff-tree`
+  - `_build_phase_context` recebe `project_dir` e inclui arquivos modificados por task concluida
+  - `run_plan` passa `phase_context=phase_ctx` para `run_cycle` (cadeia fechada)
+  - Fix: icones dry-run escapados corretamente para Rich (`r"\[x]"` etc.)
+  - Fix: `_show_subphase_summary` e `_show_phase_summary` incluem tasks `already_done`
+
+**O que foi implementado (Fase 6.4):**
+- `orchestrator/cli.py`:
+  - `_print_plan_view(plan, phase_filter, subtask_filter)` — snapshot visual do plano com icones coloridos por status
+  - Novo comando `orchestrate plan run` com flags: `--phase`, `--subtask`, `--auto`, `--dry-run`, `-y/-q/-v`
+  - Exibe snapshot antes da execucao e snapshot atualizado apos conclusao
+  - Fases sem subfases no escopo do filtro sao omitidas do snapshot
+
 - Total: 406 testes passando
 
 ---
@@ -357,14 +364,11 @@ CycleRecord    -- task, status, plan, review, decision, attempt,
 
 ## Proximos passos imediatos
 
-1. **Fase 6.3 — Critic de Coerencia Entre Tasks:**
-   - Modificar `critic.py` para aceitar `phase_context: str | None`
-   - Atualizar `critic_system.md` com criterio de coerencia entre tasks
-   - Gerar `phase_context` em `plan_runner.py` antes de cada ciclo
-
-2. **Fase 6.4 — Comando CLI Principal:**
-   - `orchestrate plan run [-d dir] [--phase] [--subtask] [--auto] [--dry-run]`
-   - Output visual de progresso em tempo real
+1. **Fase 6.5 — Geracao de Plano por IA:**
+   - `orchestrator/project_planner.py` — agente que recebe descricao do projeto e gera PLANO.md
+   - `orchestrator/prompts/project_planner_system.md` — prompt especializado
+   - Critic (Gemini) avalia o plano gerado antes de salvar
+   - `orchestrate plan generate "descricao"` — CLI com revisao e aprovacao humana
 
 Plano detalhado: `docs/Fase6_Plano_Hierarquico.md`
 
