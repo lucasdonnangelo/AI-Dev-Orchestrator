@@ -445,8 +445,11 @@ async def run_plan(  # noqa: C901
             border_style="dim",
         ))
         _ICON: dict[str, str] = {
-            "pending": "[ ]", "running": "[>]", "done": "[x]",
-            "escalated": "[!]", "skipped": "[-]",
+            "pending":   r"\[ ]",
+            "running":   r"\[>]",
+            "done":      r"\[x]",
+            "escalated": r"\[!]",
+            "skipped":   r"\[-]",
         }
         for _, _, task in entries:
             icon = _ICON.get(task.status.value, "[ ]")

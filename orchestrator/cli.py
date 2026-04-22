@@ -1127,5 +1127,161 @@ def plan_reset(task_id: str, project_dir: str, yes: bool) -> None:
     console.print(f"[green][OK] Task {task_id} reset to pending.[/green]")
 
 
+def _print_plan_view(
+    plan_obj,
+    phase_filter: str | None = None,
+    subtask_filter: str | None = None,
+) -> None:
+    """Print a compact view of all tasks in scope with their current status."""
+    from orchestrator.plan import ProjectPlan
+
+    p: ProjectPlan = plan_obj
+    title_line = f"[bold]{p.name}[/bold]"
+
+    lines: list[str] = []
+    for phase in p.phases:
+        if phase_filter and phase.id != phase_filter:
+            continue
+
+        # Build subphase lines first; skip the phase header if nothing matches.
+        sp_lines: list[str] = []
+        for sp in phase.subphases:
+            if subtask_filter and sp.id != subtask_filter:
+                continue
+            sp_done = len(sp.done_tasks)
+            sp_total = len(sp.tasks)
+            sp_color = "green" if sp.is_complete else "dim"
+            sp_lines.append(
+                f"  [{sp_color}]{sp.id} {sp.name}[/{sp_color}]"
+                f"  [dim]{sp_done}/{sp_total}[/dim]"
+            )
+            for task in sp.tasks:
+                st = task.status.value
+                icon = _STATUS_ICON[st]
+                color = _STATUS_COLOR[st]
+                commit_info = (
+                    f"  [dim]({task.commit_hash})[/dim]" if task.commit_hash else ""
+                )
+                sp_lines.append(
+                    f"    [{color}]{icon} {task.id}[/{color}]"
+                    f"  {task.description}{commit_info}"
+                )
+
+        if not sp_lines:
+            continue
+
+        ph_done = len(phase.done_tasks)
+        ph_total = len(phase.all_tasks)
+        ph_color = "green" if phase.is_complete else ("cyan" if ph_done else "dim")
+        lines.append(
+            f"[{ph_color}]Fase {phase.id} -- {phase.name}[/{ph_color}]"
+            f"  [dim]{ph_done}/{ph_total}[/dim]"
+        )
+        lines.extend(sp_lines)
+
+    if lines:
+        console.print(Panel("\n".join(lines), title=title_line, border_style="blue"))
+
+
+@plan_group.command("run")
+@click.option(
+    "--project-dir", "-d",
+    default=".",
+    show_default=True,
+    help="Path to the project directory containing PLANO.md.",
+)
+@click.option(
+    "--phase",
+    default=None,
+    metavar="ID",
+    help="Execute only tasks in this phase (e.g. '1').",
+)
+@click.option(
+    "--subtask",
+    default=None,
+    metavar="ID",
+    help="Execute only tasks in this subphase (e.g. '1.1').",
+)
+@click.option(
+    "--auto",
+    "auto_continue",
+    is_flag=True,
+    help="Execute all tasks without pausing at subphase/phase boundaries.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Print what would be executed without running anything.",
+)
+@click.option("--yes", "-y", is_flag=True, help="Skip all confirmation prompts.")
+@click.option("--quiet", "-q", is_flag=True, help="Suppress non-essential output.")
+@click.option("--verbose", "-v", is_flag=True, help="Show extra detail.")
+def plan_run(
+    project_dir: str,
+    phase: str | None,
+    subtask: str | None,
+    auto_continue: bool,
+    dry_run: bool,
+    yes: bool,
+    quiet: bool,
+    verbose: bool,
+) -> None:
+    """Execute tasks from PLANO.md through the full agent cycle.
+
+    Without filters, executes every pending task in the plan stopping at
+    subphase and phase boundaries for validation.  Use --phase or --subtask to
+    limit the scope, --auto to skip all pause prompts, or --dry-run to preview
+    what would run without executing anything.
+
+    \b
+    Examples:
+      orchestrate plan run                          # run all pending tasks
+      orchestrate plan run --phase 1                # only tasks in Phase 1
+      orchestrate plan run --subtask 1.1 --auto     # subfase 1.1, no pauses
+      orchestrate plan run --dry-run                # preview only
+      orchestrate plan run -d ./myproject -y        # skip all prompts
+    """
+    from orchestrator.plan import parse_plan
+    from orchestrator.plan_runner import RunPlanOptions, run_plan as _run_plan
+
+    plano = _find_plano(project_dir)
+    config = Config.load(project_dir)
+    errors = config.validate()
+    if errors:
+        for err in errors:
+            console.print(f"[red]ERROR[/red] {err}")
+        raise SystemExit(1)
+
+    plan_obj = parse_plan(plano)
+
+    if not quiet:
+        _print_plan_view(plan_obj, phase_filter=phase, subtask_filter=subtask)
+
+    options = RunPlanOptions(
+        phase=phase,
+        subtask=subtask,
+        auto_continue=auto_continue,
+        dry_run=dry_run,
+        yes=yes,
+        quiet=quiet,
+        verbose=verbose,
+    )
+
+    try:
+        asyncio.run(_run_plan(plano, config, options))
+    except anthropic.APIError as e:
+        console.print(f"[red]ERROR[/red] Anthropic API error: {e}")
+        raise SystemExit(1)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted.[/yellow]")
+        raise SystemExit(130)
+
+    # Re-read and show the updated plan state after execution
+    if not quiet and not dry_run:
+        updated = parse_plan(plano)
+        console.print()
+        _print_plan_view(updated, phase_filter=phase, subtask_filter=subtask)
+
+
 if __name__ == "__main__":
     cli()
