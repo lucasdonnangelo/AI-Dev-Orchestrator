@@ -24,6 +24,7 @@ async def run_cycle(
     plan: TaskPlan | None = None,
     event_bus: EventBus | None = None,
     pause_controller: PauseController | None = None,
+    phase_context: str | None = None,
 ) -> tuple[CycleRecord, str, DecisionResult | None]:
     """Execute a full orchestration cycle for the given task.
 
@@ -87,7 +88,10 @@ async def run_cycle(
         # 3. Critic loop — refine plan before execution
         console.print("[cyan]  [2/5] Critic loop...[/cyan]")
         record.plan = await critic.run_critic_loop(
-            task, record.plan, config, session_context=session_ctx, event_bus=event_bus
+            task, record.plan, config,
+            session_context=session_ctx,
+            phase_context=phase_context,
+            event_bus=event_bus,
         )
 
     # Pause check #1 — after planning/critic, before first execution.
