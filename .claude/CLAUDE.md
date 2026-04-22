@@ -49,10 +49,9 @@ Voce (task)
 ### [OK] Fase 3 — Orquestracao Avancada (COMPLETA)
 ### [OK] Fase 4 — Extensibilidade (COMPLETA)
 ### [OK] Fase 5 — Dashboard Visual (COMPLETA — 5.4 pulada intencionalmente)
+### [OK] Fase 6 — Orquestracao por Plano Hierarquico (COMPLETA)
 
-406 testes passando. 6/6 tasks do batch cobaia aprovadas. Sistema validado end-to-end.
-
-### [>>] Fase 6 — Orquestracao por Plano Hierarquico (EM ANDAMENTO)
+453 testes passando. 6/6 tasks do batch cobaia aprovadas. Sistema validado end-to-end.
 
 Plano detalhado em: `docs/Fase6_Plano_Hierarquico.md`
 
@@ -61,24 +60,24 @@ Plano detalhado em: `docs/Fase6_Plano_Hierarquico.md`
 - `parse_plan(path)` / `parse_plan_text(text)` — parser Markdown hierarquico
 - `write_plan(plan, path)` — writer in-place (preserva formatacao, atualiza so checkboxes)
 - CLI: `orchestrate plan status` / `plan next` / `plan reset TASK_ID`
-- `tests/test_plan.py` — 94 testes
 
-#### [OK] 6.2 Motor de Execucao por Plano (COMPLETA)
+#### [OK] 6.2 Motor de Execucao por Plano
 - `orchestrator/plan_runner.py` — RunPlanOptions, run_plan, _build_phase_context, pausas, retomada idempotente
-- `orchestrator/plan.py` — fix: parser reconhece `[-]` como SKIPPED
-- `tests/test_plan_runner.py` — 32 testes. Total: 406 testes
 
-#### [OK] 6.3 Critic de Coerencia Entre Tasks (COMPLETA)
+#### [OK] 6.3 Critic de Coerencia Entre Tasks
 - `orchestrator/critic.py` — `critique_plan` e `run_critic_loop` aceitam `phase_context: str | None`
-- `orchestrator/orchestrator.py` — `run_cycle` propaga `phase_context` para o Critic
 - `orchestrator/prompts/critic_system.md` — criterio Coherence adicionado
-- `orchestrator/plan_runner.py` — `_get_commit_files`, `_build_phase_context` enriquecido com arquivos por commit
 
-#### [OK] 6.4 Comando CLI Principal (COMPLETA)
+#### [OK] 6.4 Comando CLI Principal
 - `orchestrate plan run` com `--phase/--subtask/--auto/--dry-run/-y/-q/-v`
 - `_print_plan_view` — snapshot visual do plano antes e apos execucao
 
-#### [>>] 6.5 Geracao de Plano por IA (PROXIMA)
+#### [OK] 6.5 Geracao de Plano por IA
+- `orchestrator/project_planner.py` — `generate_project_plan`, `refine_project_plan`, `run_project_plan_critic_loop`
+- `orchestrator/critic.py` — `critique_project_plan` com role `plan_critic`
+- `orchestrator/prompts/project_planner_system.md` — prompt especializado para geracao de PLANO.md
+- `orchestrator/prompts/plan_critic_system.md` — prompt de avaliacao estrutural do plano hierarquico
+- `orchestrate plan generate DESCRIPTION [-p PREMISES] [-s STACK] [-y] [--no-critic]`
 
 ## Estrutura do Projeto
 
@@ -104,6 +103,8 @@ ai-dev-orchestrator/
 │   ├── events.py             # [OK] EventBus
 │   ├── server.py             # [OK] FastAPI backend
 │   ├── plan.py               # [OK] Modelo hierarquico + parse_plan + write_plan (Fase 6)
+│   ├── plan_runner.py        # [OK] Motor de execucao por plano (Fase 6)
+│   ├── project_planner.py    # [OK] Geracao de PLANO.md por IA + loop Critic (Fase 6.5)
 │   ├── providers/
 │   │   ├── __init__.py       # [OK] Factory + plugin registry
 │   │   ├── base.py           # [OK] BaseAgent
@@ -118,7 +119,7 @@ ai-dev-orchestrator/
 ├── docs/
 │   ├── AI_Dev_Orchestrator_Plano.md
 │   └── Fase5_Dashboard_Plano.md
-├── tests/                    # [OK] 175 testes
+├── tests/                    # [OK] 453 testes
 └── ...
 ```
 

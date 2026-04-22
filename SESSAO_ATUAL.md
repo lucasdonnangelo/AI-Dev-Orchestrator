@@ -1,6 +1,6 @@
 # Sessao Atual — AI Dev Orchestrator
 
-**Ultima atualizacao:** 22/04/2026 (Fases 6.3 e 6.4 concluidas — iniciando 6.5)
+**Ultima atualizacao:** 22/04/2026 (Fase 6.5 concluida — Fase 6 completa)
 **Branch:** main
 
 ---
@@ -57,38 +57,43 @@ Voce (task)
 | 6.2 — Motor de Execucao por Plano | plan_runner.py, run_plan, contexto acumulado, pausa, retomada | COMPLETA |
 | 6.3 — Critic de Coerencia Entre Tasks | phase_context no critic, critic_system.md atualizado | COMPLETA |
 | 6.4 — Comando CLI Principal | orchestrate plan run (--phase/--subtask/--auto/--dry-run), output visual | COMPLETA |
-| 6.5 — Geracao de Plano por IA | project_planner.py, orchestrate plan generate | PROXIMA |
+| 6.5 — Geracao de Plano por IA | project_planner.py, plan_critic_system.md, orchestrate plan generate | COMPLETA |
 
 ---
 
 ## Ultima tarefa aprovada
 
-**Tarefa:** Fase 6.4 — Comando CLI Principal (plan run)
+**Tarefa:** Fase 6.5 — Geracao de Plano por IA (completa)
 **Commits relevantes:**
-- `db1aff3` feat: Phase 6.3.1 - phase context injection in Critic for cross-task coherence
-- `e42368c` feat: Phase 6.3 complete - Critic receives accumulated phase context with modified files per task
-- `39569f5` feat: Phase 6.4 complete - orchestrate plan run command with visual progress display
+- `b52cbd4` feat: Phase 6.5.1 - project plan generator agent with specialized system prompt
+- `324ff9a` feat: Phase 6.5.2 - Plan Critic loop for project plan validation and refinement
+- `39d0373` feat: Phase 6.5 complete - orchestrate plan generate with Critic loop and interactive approval
 
-**O que foi implementado (Fase 6.3):**
-- `orchestrator/critic.py` — `critique_plan` e `run_critic_loop` aceitam `phase_context: str | None`
-  - Quando fornecido, injetado no prompt como `## Phase Context (tasks already completed in this phase)`
-- `orchestrator/orchestrator.py` — `run_cycle` aceita `phase_context` e propaga para `run_critic_loop`
-- `orchestrator/prompts/critic_system.md` — novo criterio **Coherence**: detecta conflitos/duplicacoes com tasks anteriores da mesma fase
-- `orchestrator/plan_runner.py`:
-  - `_get_commit_files(project_dir, commit_hash)` — lista arquivos tocados por commit via `git diff-tree`
-  - `_build_phase_context` recebe `project_dir` e inclui arquivos modificados por task concluida
-  - `run_plan` passa `phase_context=phase_ctx` para `run_cycle` (cadeia fechada)
-  - Fix: icones dry-run escapados corretamente para Rich (`r"\[x]"` etc.)
-  - Fix: `_show_subphase_summary` e `_show_phase_summary` incluem tasks `already_done`
+**O que foi implementado (Fase 6.5):**
 
-**O que foi implementado (Fase 6.4):**
-- `orchestrator/cli.py`:
-  - `_print_plan_view(plan, phase_filter, subtask_filter)` — snapshot visual do plano com icones coloridos por status
-  - Novo comando `orchestrate plan run` com flags: `--phase`, `--subtask`, `--auto`, `--dry-run`, `-y/-q/-v`
-  - Exibe snapshot antes da execucao e snapshot atualizado apos conclusao
-  - Fases sem subfases no escopo do filtro sao omitidas do snapshot
+**6.5.1 — Agente Planejador de Projeto:**
+- `orchestrator/project_planner.py`:
+  - `generate_project_plan(description, config, premises, stack)` — chama Claude com prompt especializado, retorna `(raw_md, ProjectPlan)`
+  - `_strip_outer_fence(text)` — remove code fence se o modelo envolver a saida
+  - `_build_user_message(description, premises, stack)` — monta prompt com campos opcionais
+- `orchestrator/prompts/project_planner_system.md` — prompt especializado: formato exato do PLANO.md, regras de task (imperativo, atomico, concreto), ordem de fases recomendada
 
-- Total: 406 testes passando
+**6.5.2 — Critic do Plano de Projeto:**
+- `orchestrator/prompts/plan_critic_system.md` — prompt para avaliar PLANO.md hierarquico (7 criterios: Completeness, Structure, Granularity, Coherence, Testability, Clarity, Feasibility)
+- `orchestrator/critic.py` — `critique_project_plan(raw_md, config, round_num, description)` com role `"plan_critic"`
+- `orchestrator/project_planner.py`:
+  - `refine_project_plan(description, raw_md, critic_result, config, premises, stack)` — refina PLANO.md com base no feedback
+  - `run_project_plan_critic_loop(description, raw_md, plan, config, ...)` — loop iterativo Project Planner <-> Plan Critic respeitando `critic_min/max_rounds`
+
+**6.5.3 — Comando CLI:**
+- `orchestrator/cli.py` — `orchestrate plan generate DESCRIPTION [-d DIR] [-p PREMISES] [-s STACK] [-y] [--no-critic]`
+  - Fluxo: gera -> critica -> exibe preview Rich -> `[y/n/edit]` -> salva PLANO.md
+  - `edit`: abre `$EDITOR`, re-valida Markdown, salva
+  - `-y`: auto-aprova sem prompts
+  - `--no-critic`: pula loop Critic
+  - Apos salvar: oferece iniciar execucao imediatamente
+
+- Total: 453 testes passando
 
 ---
 
@@ -364,11 +369,7 @@ CycleRecord    -- task, status, plan, review, decision, attempt,
 
 ## Proximos passos imediatos
 
-1. **Fase 6.5 — Geracao de Plano por IA:**
-   - `orchestrator/project_planner.py` — agente que recebe descricao do projeto e gera PLANO.md
-   - `orchestrator/prompts/project_planner_system.md` — prompt especializado
-   - Critic (Gemini) avalia o plano gerado antes de salvar
-   - `orchestrate plan generate "descricao"` — CLI com revisao e aprovacao humana
+**Fase 6 completa.** Proximas iniciativas a definir.
 
 Plano detalhado: `docs/Fase6_Plano_Hierarquico.md`
 
