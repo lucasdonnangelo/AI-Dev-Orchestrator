@@ -7,7 +7,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from orchestrator.project_planner import _build_user_message, _strip_outer_fence, generate_project_plan
+from orchestrator.project_planner import (
+    _build_user_message,
+    _strip_outer_fence,
+    generate_project_plan,
+    refine_project_plan,
+    run_project_plan_critic_loop,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -239,3 +245,346 @@ async def test_generate_project_plan_uses_project_planner_role() -> None:
     config.load_prompt.assert_called_once()
     role_arg = config.load_prompt.call_args[0][0]
     assert role_arg == "project_planner"
+
+
+# ---------------------------------------------------------------------------
+# refine_project_plan
+# ---------------------------------------------------------------------------
+
+_IMPROVED_PLANO = textwrap.dedent("""\
+    # FinanceAPI
+
+    ## Fase 1 — Setup
+
+    ### 1.1 Project Structure
+
+    - [ ] 1.1.1 Create pyproject.toml with dependencies
+    - [ ] 1.1.2 Create directory structure
+    - [ ] 1.1.3 Configure environment variables
+    - [ ] 1.1.4 Write initial pytest configuration
+
+    ## Fase 2 — Core
+
+    ### 2.1 Models
+
+    - [ ] 2.1.1 Create SQLAlchemy models
+    - [ ] 2.1.2 Create Alembic migration
+    - [ ] 2.1.3 Write unit tests for models
+""")
+
+
+@pytest.mark.asyncio
+async def test_refine_project_plan_returns_improved_plan() -> None:
+    """refine_project_plan calls the planner provider and returns updated plan."""
+    from orchestrator.models import CriticResult
+
+    config = MagicMock()
+    config.planner_provider = "anthropic"
+    config.load_prompt.return_value = "system"
+
+    mock_provider = AsyncMock()
+    mock_provider.call = AsyncMock(return_value=_IMPROVED_PLANO)
+
+    critic_result = CriticResult(
+        consensus=False,
+        observations=["Missing test tasks"],
+        suggestions=["Add pytest tasks at the end of each subphase"],
+        score=6,
+        round=1,
+    )
+
+    with patch("orchestrator.project_planner.make_provider", return_value=mock_provider):
+        new_raw, new_plan = await refine_project_plan(
+            description="A financial REST API",
+            raw_md=_SAMPLE_PLANO,
+            critic_result=critic_result,
+            config=config,
+        )
+
+    assert "# FinanceAPI" in new_raw
+    assert new_plan.name == "FinanceAPI"
+    # Improved plan has more tasks in subphase 1.1
+    assert len(new_plan.phases[0].subphases[0].tasks) == 4
+
+
+@pytest.mark.asyncio
+async def test_refine_project_plan_includes_critic_feedback_in_prompt() -> None:
+    """refine_project_plan embeds observations and suggestions in the user message."""
+    from orchestrator.models import CriticResult
+
+    config = MagicMock()
+    config.planner_provider = "anthropic"
+    config.load_prompt.return_value = "system"
+
+    captured: list[str] = []
+
+    async def fake_call(prompt: str, system: str) -> str:
+        captured.append(prompt)
+        return _IMPROVED_PLANO
+
+    mock_provider = MagicMock()
+    mock_provider.call = fake_call
+
+    critic_result = CriticResult(
+        consensus=False,
+        observations=["No test coverage"],
+        suggestions=["Add pytest tasks"],
+        score=5,
+        round=1,
+    )
+
+    with patch("orchestrator.project_planner.make_provider", return_value=mock_provider):
+        await refine_project_plan(
+            description="A financial REST API",
+            raw_md=_SAMPLE_PLANO,
+            critic_result=critic_result,
+            config=config,
+        )
+
+    assert captured
+    prompt = captured[0]
+    assert "No test coverage" in prompt
+    assert "Add pytest tasks" in prompt
+    assert "score 5/10" in prompt
+
+
+@pytest.mark.asyncio
+async def test_refine_project_plan_uses_project_planner_role() -> None:
+    """refine_project_plan loads the prompt with role='project_planner'."""
+    from orchestrator.models import CriticResult
+
+    config = MagicMock()
+    config.planner_provider = "anthropic"
+    config.load_prompt.return_value = "system"
+
+    mock_provider = AsyncMock()
+    mock_provider.call = AsyncMock(return_value=_IMPROVED_PLANO)
+
+    critic_result = CriticResult(
+        consensus=False, observations=[], suggestions=[], score=5, round=1
+    )
+
+    with patch("orchestrator.project_planner.make_provider", return_value=mock_provider):
+        await refine_project_plan("desc", _SAMPLE_PLANO, critic_result, config)
+
+    role_arg = config.load_prompt.call_args[0][0]
+    assert role_arg == "project_planner"
+
+
+# ---------------------------------------------------------------------------
+# run_project_plan_critic_loop
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_critic_loop_stops_at_consensus() -> None:
+    """Loop stops after min_rounds when consensus is reached."""
+    from orchestrator.models import CriticResult
+    from orchestrator.plan import parse_plan_text
+
+    config = MagicMock()
+    config.critic_min_rounds = 1
+    config.critic_max_rounds = 3
+
+    consensus_result = CriticResult(
+        consensus=True, observations=["Looks good"], suggestions=[], score=9, round=1
+    )
+
+    plan = parse_plan_text(_SAMPLE_PLANO)
+
+    with patch(
+        "orchestrator.project_planner.critique_project_plan",
+        new=AsyncMock(return_value=consensus_result),
+    ):
+        final_raw, final_plan = await run_project_plan_critic_loop(
+            description="A financial REST API",
+            raw_md=_SAMPLE_PLANO,
+            plan=plan,
+            config=config,
+        )
+
+    assert final_plan.name == "FinanceAPI"
+    assert final_raw == _SAMPLE_PLANO  # no refinement needed
+
+
+@pytest.mark.asyncio
+async def test_critic_loop_refines_on_no_consensus() -> None:
+    """Loop calls refine_project_plan when Critic does not reach consensus."""
+    from orchestrator.models import CriticResult
+    from orchestrator.plan import parse_plan_text
+
+    config = MagicMock()
+    config.critic_min_rounds = 1
+    config.critic_max_rounds = 2
+
+    no_consensus = CriticResult(
+        consensus=False, observations=["Missing tests"], suggestions=["Add tests"], score=5, round=1
+    )
+    consensus = CriticResult(
+        consensus=True, observations=["Good now"], suggestions=[], score=9, round=2
+    )
+
+    plan = parse_plan_text(_SAMPLE_PLANO)
+    improved_plan = parse_plan_text(_IMPROVED_PLANO)
+
+    critique_calls: list[int] = []
+
+    async def fake_critique(raw_md: str, config: object, round_num: int, **kwargs: object) -> CriticResult:
+        critique_calls.append(round_num)
+        return no_consensus if round_num == 1 else consensus
+
+    async def fake_refine(*args: object, **kwargs: object) -> tuple[str, object]:
+        return _IMPROVED_PLANO, improved_plan
+
+    with (
+        patch("orchestrator.project_planner.critique_project_plan", side_effect=fake_critique),
+        patch("orchestrator.project_planner.refine_project_plan", side_effect=fake_refine),
+    ):
+        final_raw, final_plan = await run_project_plan_critic_loop(
+            description="A financial REST API",
+            raw_md=_SAMPLE_PLANO,
+            plan=plan,
+            config=config,
+        )
+
+    assert critique_calls == [1, 2]
+    assert final_raw == _IMPROVED_PLANO
+
+
+@pytest.mark.asyncio
+async def test_critic_loop_stops_at_max_rounds() -> None:
+    """Loop exits after max_rounds even without consensus, returning last plan."""
+    from orchestrator.models import CriticResult
+    from orchestrator.plan import parse_plan_text
+
+    config = MagicMock()
+    config.critic_min_rounds = 2
+    config.critic_max_rounds = 2
+
+    no_consensus = CriticResult(
+        consensus=False, observations=["Still bad"], suggestions=[], score=4, round=1
+    )
+
+    plan = parse_plan_text(_SAMPLE_PLANO)
+
+    critique_calls: list[int] = []
+
+    async def fake_critique(raw_md: str, config: object, round_num: int, **kwargs: object) -> CriticResult:
+        critique_calls.append(round_num)
+        return no_consensus
+
+    async def fake_refine(*args: object, **kwargs: object) -> tuple[str, object]:
+        return _SAMPLE_PLANO, plan
+
+    with (
+        patch("orchestrator.project_planner.critique_project_plan", side_effect=fake_critique),
+        patch("orchestrator.project_planner.refine_project_plan", side_effect=fake_refine),
+    ):
+        final_raw, final_plan = await run_project_plan_critic_loop(
+            description="desc",
+            raw_md=_SAMPLE_PLANO,
+            plan=plan,
+            config=config,
+        )
+
+    # Should have run exactly max_rounds rounds
+    assert len(critique_calls) == 2
+    assert final_plan.name == "FinanceAPI"
+
+
+# ---------------------------------------------------------------------------
+# critique_project_plan (unit test for the critic.py function)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_critique_project_plan_parses_result() -> None:
+    """critique_project_plan calls critic provider and returns CriticResult."""
+    import json
+
+    from orchestrator.critic import critique_project_plan
+
+    config = MagicMock()
+    config.critic_provider = "google"
+    config.load_prompt.return_value = "system"
+
+    critic_json = json.dumps({
+        "consensus": True,
+        "observations": ["Well structured"],
+        "suggestions": [],
+        "score": 9,
+        "round": 1,
+    })
+
+    mock_provider = AsyncMock()
+    mock_provider.call = AsyncMock(return_value=critic_json)
+
+    with patch("orchestrator.critic.make_provider", return_value=mock_provider):
+        result = await critique_project_plan(
+            raw_md=_SAMPLE_PLANO,
+            config=config,
+            round_num=1,
+            description="A financial API",
+        )
+
+    assert result.consensus is True
+    assert result.score == 9
+    assert result.round == 1
+    assert "Well structured" in result.observations
+
+
+@pytest.mark.asyncio
+async def test_critique_project_plan_uses_plan_critic_role() -> None:
+    """critique_project_plan loads the prompt with role='plan_critic'."""
+    import json
+
+    from orchestrator.critic import critique_project_plan
+
+    config = MagicMock()
+    config.critic_provider = "google"
+    config.load_prompt.return_value = "system"
+
+    critic_json = json.dumps({
+        "consensus": True, "observations": [], "suggestions": [], "score": 8, "round": 1
+    })
+
+    mock_provider = AsyncMock()
+    mock_provider.call = AsyncMock(return_value=critic_json)
+
+    with patch("orchestrator.critic.make_provider", return_value=mock_provider):
+        await critique_project_plan(_SAMPLE_PLANO, config, round_num=1)
+
+    role_arg = config.load_prompt.call_args[0][0]
+    assert role_arg == "plan_critic"
+
+
+@pytest.mark.asyncio
+async def test_critique_project_plan_includes_description_in_prompt() -> None:
+    """critique_project_plan includes the project description in the user message."""
+    import json
+
+    from orchestrator.critic import critique_project_plan
+
+    config = MagicMock()
+    config.critic_provider = "google"
+    config.load_prompt.return_value = "system"
+
+    captured: list[str] = []
+
+    async def fake_call(prompt: str, system: str) -> str:
+        captured.append(prompt)
+        return json.dumps({
+            "consensus": True, "observations": [], "suggestions": [], "score": 8, "round": 1
+        })
+
+    mock_provider = MagicMock()
+    mock_provider.call = fake_call
+
+    with patch("orchestrator.critic.make_provider", return_value=mock_provider):
+        await critique_project_plan(
+            _SAMPLE_PLANO, config, round_num=1,
+            description="Build a financial REST API with JWT auth"
+        )
+
+    assert captured
+    assert "Build a financial REST API with JWT auth" in captured[0]

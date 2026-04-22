@@ -19,6 +19,13 @@ if TYPE_CHECKING:
 _PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "critic_system.md"
 _FALLBACK = "You are a plan critic. Evaluate the plan and return a JSON CriticResult."
 
+_PLAN_CRITIC_PROMPT_PATH = (
+    Path(__file__).resolve().parent / "prompts" / "plan_critic_system.md"
+)
+_PLAN_CRITIC_FALLBACK = (
+    "You are a project plan critic. Evaluate the PLANO.md and return a JSON CriticResult."
+)
+
 console = Console(highlight=False)
 
 
@@ -67,6 +74,44 @@ async def critique_plan(
     )
     data = json.loads(_strip_fences(raw))
     data["round"] = round_num  # enforce correct round regardless of model output
+    return CriticResult.from_dict(data)
+
+
+async def critique_project_plan(
+    raw_md: str,
+    config: Config,
+    round_num: int,
+    description: str = "",
+) -> CriticResult:
+    """Run a single round of critique on a generated PLANO.md.
+
+    Unlike :func:`critique_plan` which evaluates a ``TaskPlan`` JSON object,
+    this function evaluates the full hierarchical Markdown plan produced by the
+    Project Planner agent.
+
+    Args:
+        raw_md: The PLANO.md content (Markdown string) to evaluate.
+        config: Resolved orchestrator configuration.
+        round_num: Current round number (1-based), embedded in the prompt.
+        description: Original project description, included so the Critic can
+            assess completeness relative to the stated goals.
+
+    Returns:
+        A :class:`~orchestrator.models.CriticResult` with consensus flag, score,
+        observations, and suggestions.
+    """
+    user_message = f"Round: {round_num}\n\n"
+    if description.strip():
+        user_message += f"## Original Project Description\n\n{description.strip()}\n\n"
+    user_message += f"## PLANO.md to Evaluate\n\n{raw_md}"
+
+    provider = make_provider(config.critic_provider, config)
+    raw = await provider.call(
+        prompt=user_message,
+        system=config.load_prompt("plan_critic", _PLAN_CRITIC_PROMPT_PATH, _PLAN_CRITIC_FALLBACK),
+    )
+    data = json.loads(_strip_fences(raw))
+    data["round"] = round_num
     return CriticResult.from_dict(data)
 
 
