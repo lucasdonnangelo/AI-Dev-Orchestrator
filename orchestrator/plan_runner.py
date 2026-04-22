@@ -242,7 +242,7 @@ def _next_subphase(plan: ProjectPlan, current_sp_id: str) -> SubPhase | None:
 def _show_subphase_summary(sp: SubPhase, results: list[TaskResult]) -> None:
     """Print a compact summary for a completed subphase."""
     prefix = sp.id + "."
-    done = [r for r in results if r.status == "done" and r.task_id.startswith(prefix)]
+    done = [r for r in results if r.status in ("done", "already_done") and r.task_id.startswith(prefix)]
     escalated = [r for r in results if r.status == "escalated" and r.task_id.startswith(prefix)]
     skipped = [r for r in results if r.status == "skipped" and r.task_id.startswith(prefix)]
     lines = [
@@ -261,7 +261,7 @@ def _show_phase_summary(phase: Phase, results: list[TaskResult]) -> None:
     """Print a compact summary for a completed phase."""
     all_ids = {t.id for t in phase.all_tasks}
     phase_results = [r for r in results if r.task_id in all_ids]
-    done = [r for r in phase_results if r.status == "done"]
+    done = [r for r in phase_results if r.status in ("done", "already_done")]
     escalated = [r for r in phase_results if r.status == "escalated"]
     skipped = [r for r in phase_results if r.status == "skipped"]
     lines = [
