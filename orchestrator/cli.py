@@ -1283,5 +1283,236 @@ def plan_run(
         _print_plan_view(updated, phase_filter=phase, subtask_filter=subtask)
 
 
+@plan_group.command("generate")
+@click.argument("description")
+@click.option(
+    "--project-dir", "-d",
+    default=".",
+    show_default=True,
+    help="Directory where PLANO.md will be saved.",
+)
+@click.option(
+    "--premises", "-p",
+    default="",
+    metavar="TEXT",
+    help="Constraints or architectural decisions already made (optional).",
+)
+@click.option(
+    "--stack", "-s",
+    default="",
+    metavar="TEXT",
+    help="Technology stack information (optional).",
+)
+@click.option(
+    "--yes", "-y",
+    is_flag=True,
+    help="Auto-approve the generated plan without prompting.",
+)
+@click.option(
+    "--critic/--no-critic",
+    default=True,
+    show_default=True,
+    help="Run the Plan Critic loop before presenting the plan.",
+)
+def plan_generate(
+    description: str,
+    project_dir: str,
+    premises: str,
+    stack: str,
+    yes: bool,
+    critic: bool,
+) -> None:
+    """Generate a PLANO.md for a project from a natural-language description.
+
+    Uses the Planner (Claude) to create a hierarchical plan and the Plan Critic
+    (Gemini) to validate and refine it before saving.  You review and approve the
+    plan before it is written to disk.
+
+    \b
+    Examples:
+      orchestrate plan generate "REST API with JWT auth and PostgreSQL"
+      orchestrate plan generate "CLI tool in Go" -d ./myproject --no-critic
+      orchestrate plan generate "SaaS app" -p "Use Railway" -s "Python, FastAPI"
+      orchestrate plan generate "..." -y   # auto-approve
+    """
+    from orchestrator.plan import parse_plan_text
+    from orchestrator.project_planner import generate_project_plan, run_project_plan_critic_loop
+
+    project_path = Path(project_dir).resolve()
+    plano_path = project_path / "PLANO.md"
+
+    config = Config.load(str(project_path))
+    errors = config.validate()
+    if errors:
+        for err in errors:
+            console.print(f"[red]ERROR[/red] {err}")
+        raise SystemExit(1)
+
+    # ------------------------------------------------------------------ #
+    # 1. Generate initial plan                                             #
+    # ------------------------------------------------------------------ #
+    console.print(f"\n[cyan][1/2] Generating PLANO.md for:[/cyan] {description[:80]}")
+
+    try:
+        raw_md, plan = asyncio.run(
+            generate_project_plan(description, config, premises=premises, stack=stack)
+        )
+    except anthropic.APIError as e:
+        console.print(f"[red]ERROR[/red] Anthropic API error: {e}")
+        raise SystemExit(1)
+    except ValueError as e:
+        console.print(f"[red]ERROR[/red] Could not parse generated plan: {e}")
+        raise SystemExit(1)
+
+    # ------------------------------------------------------------------ #
+    # 2. Plan Critic loop (optional)                                       #
+    # ------------------------------------------------------------------ #
+    if critic:
+        console.print("[cyan][2/2] Running Plan Critic loop...[/cyan]")
+        try:
+            raw_md, plan = asyncio.run(
+                run_project_plan_critic_loop(
+                    description, raw_md, plan, config, premises=premises, stack=stack
+                )
+            )
+        except anthropic.APIError as e:
+            console.print(f"[red]ERROR[/red] Anthropic API error: {e}")
+            raise SystemExit(1)
+    else:
+        console.print("[dim][2/2] Critic skipped (--no-critic).[/dim]")
+
+    # ------------------------------------------------------------------ #
+    # 3. Display the plan for review                                       #
+    # ------------------------------------------------------------------ #
+    console.print()
+    _print_generated_plan_view(plan)
+    console.print()
+    console.print(
+        Panel(
+            Syntax(raw_md, "markdown", theme="monokai", word_wrap=True),
+            title="Generated PLANO.md",
+            border_style="blue",
+        )
+    )
+
+    # ------------------------------------------------------------------ #
+    # 4. Approval flow                                                     #
+    # ------------------------------------------------------------------ #
+    if yes:
+        approved_md = raw_md
+    else:
+        choice = _prompt_plan_approval()
+
+        if choice == "n":
+            console.print("[yellow]Plan discarded. PLANO.md was NOT saved.[/yellow]")
+            return
+
+        if choice == "edit":
+            edited = click.edit(raw_md, extension=".md")
+            if edited is None:
+                console.print(
+                    "[yellow]Editor closed without changes. "
+                    "Plan discarded. PLANO.md was NOT saved.[/yellow]"
+                )
+                return
+            # Re-parse to validate the edited content
+            try:
+                plan = parse_plan_text(edited)
+            except ValueError as e:
+                console.print(f"[red]ERROR[/red] Edited plan is not valid: {e}")
+                raise SystemExit(1)
+            approved_md = edited
+        else:
+            # choice == "y"
+            approved_md = raw_md
+
+    # ------------------------------------------------------------------ #
+    # 5. Save PLANO.md                                                     #
+    # ------------------------------------------------------------------ #
+    if plano_path.exists() and not yes:
+        click.confirm(
+            f"PLANO.md already exists in '{project_dir}'. Overwrite?",
+            default=False,
+            abort=True,
+        )
+
+    # Write the full approved Markdown directly — do NOT use write_plan's
+    # in-place checkbox-update logic, which is designed for status updates
+    # on an existing plan, not for saving a freshly generated one.
+    if not approved_md.endswith("\n"):
+        approved_md += "\n"
+    plano_path.write_text(approved_md, encoding="utf-8")
+    console.print(f"\n[green][OK] PLANO.md saved:[/green] {plano_path}")
+
+    summary = plan.progress_summary()
+    total = len(plan.all_tasks)
+    console.print(
+        f"     [dim]{len(plan.phases)} phases  |  "
+        f"{len([sp for ph in plan.phases for sp in ph.subphases])} subphases  |  "
+        f"{total} tasks[/dim]"
+    )
+
+    # ------------------------------------------------------------------ #
+    # 6. Offer to start execution immediately                              #
+    # ------------------------------------------------------------------ #
+    if not yes:
+        if click.confirm("\nStart executing the plan now?", default=False):
+            from orchestrator.plan_runner import RunPlanOptions, run_plan as _run_plan
+
+            _print_plan_view(plan)
+            options = RunPlanOptions(auto_continue=False, yes=False)
+            try:
+                asyncio.run(_run_plan(plano_path, config, options))
+            except anthropic.APIError as e:
+                console.print(f"[red]ERROR[/red] Anthropic API error: {e}")
+                raise SystemExit(1)
+            except KeyboardInterrupt:
+                console.print("\n[yellow]Interrupted.[/yellow]")
+                raise SystemExit(130)
+
+
+def _prompt_plan_approval() -> str:
+    """Prompt the user to approve, reject, or edit the generated plan.
+
+    Returns one of: ``"y"``, ``"n"``, ``"edit"``.
+    """
+    while True:
+        raw = click.prompt(
+            "Approve this plan?",
+            default="y",
+            prompt_suffix=" [y/n/edit] ",
+            show_default=False,
+        ).strip().lower()
+        if raw in ("y", "yes", ""):
+            return "y"
+        if raw in ("n", "no"):
+            return "n"
+        if raw in ("e", "edit"):
+            return "edit"
+        console.print("[yellow]Please enter y, n, or edit.[/yellow]")
+
+
+def _print_generated_plan_view(plan) -> None:
+    """Print a compact structural overview of a freshly generated plan."""
+    from orchestrator.plan import ProjectPlan
+
+    p: ProjectPlan = plan
+    lines: list[str] = []
+    for phase in p.phases:
+        ph_total = len(phase.all_tasks)
+        lines.append(
+            f"[cyan]Fase {phase.id} -- {phase.name}[/cyan]  [dim]{ph_total} tasks[/dim]"
+        )
+        for sp in phase.subphases:
+            lines.append(f"  [dim]{sp.id} {sp.name}  ({len(sp.tasks)} tasks)[/dim]")
+    console.print(
+        Panel(
+            "\n".join(lines),
+            title=f"[bold]{p.name}[/bold]  --  {len(plan.all_tasks)} tasks total",
+            border_style="cyan",
+        )
+    )
+
+
 if __name__ == "__main__":
     cli()
