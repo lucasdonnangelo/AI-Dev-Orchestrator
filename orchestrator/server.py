@@ -28,6 +28,10 @@ POST   /api/plan/abort/{id}      Abort a plan run
 GET    /api/plan/load            Parse PLANO.md from a project and return it
 POST   /api/plan/generate        Generate PLANO.md via AI + Critic loop
 POST   /api/plan/save            Save PLANO.md content to a project
+
+WebSocket:
+WS /ws/run/{run_id}          Real-time cycle events + history replay + keepalive 30s
+WS /ws/plan/{plan_run_id}    Real-time plan runner events + history replay + resume action
 """
 
 from __future__ import annotations
@@ -228,6 +232,22 @@ async def _wait_for_run(run_id: str, *, max_wait: float = 5.0) -> RunState | Non
         await asyncio.sleep(interval)
         waited += interval
     return _active_runs.get(run_id)
+
+
+async def _wait_for_plan_run(plan_run_id: str, *, max_wait: float = 5.0) -> PlanRunState | None:
+    """Poll _active_plan_runs until *plan_run_id* appears or *max_wait* seconds elapse.
+
+    Handles the race where a WebSocket client connects immediately after
+    ``POST /api/plan/run`` returns but before the PlanRunState is registered.
+    """
+    interval = 0.1
+    waited = 0.0
+    while waited < max_wait:
+        if plan_run_id in _active_plan_runs:
+            return _active_plan_runs[plan_run_id]
+        await asyncio.sleep(interval)
+        waited += interval
+    return _active_plan_runs.get(plan_run_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1188,6 +1208,109 @@ async def ws_run(websocket: WebSocket, run_id: str) -> None:
                 break
 
             await websocket.send_json(evt)
+
+    except Exception:  # noqa: BLE001 — client disconnect, network error, etc.
+        pass
+    finally:
+        with contextlib.suppress(ValueError):
+            state._client_queues.remove(queue)
+        with contextlib.suppress(Exception):
+            await websocket.close()
+
+
+@app.websocket("/ws/plan/{plan_run_id}")
+async def ws_plan(websocket: WebSocket, plan_run_id: str) -> None:
+    """Stream EventBus events for a hierarchical plan run to the connected client.
+
+    Protocol
+    --------
+    * Client connects.  Server accepts and immediately replays any events
+      emitted before the connection was established (history replay).
+    * Subsequent events are forwarded as JSON objects in real time.
+    * Cycle-level events (``cycle_*``) for the task currently executing are
+      also forwarded — the frontend may use them to drive the agent streaming
+      card via the task's ``run_id``.
+    * When the plan reaches a terminal state (``plan_complete`` or
+      ``plan_aborted``), the server sends ``{"type": "done"}`` and closes.
+    * A ``{"type": "ping"}`` keepalive is sent every 30 s while waiting.
+    * The client may send ``{"action": "resume"}`` to unblock a paused plan
+      run (equivalent to ``POST /api/plan/resume/{id}``).
+    * If *plan_run_id* is unknown after 5 s the server sends
+      ``{"type": "error", "detail": "..."}`` and closes with code 4004.
+
+    Multiple clients may connect to the same *plan_run_id* simultaneously.
+    """
+    state = await _wait_for_plan_run(plan_run_id)
+
+    await websocket.accept()
+
+    if state is None:
+        await websocket.send_json(
+            {"type": "error", "detail": f"Plan run '{plan_run_id}' not found"}
+        )
+        await websocket.close(code=4004)
+        return
+
+    # Register per-client queue THEN snapshot history — same race-free pattern
+    # as ws_run: no event can arrive between these two lines in asyncio's
+    # single-threaded execution model.
+    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+    history_snapshot = list(state.event_history)
+    state._client_queues.append(queue)
+
+    # Statuses where streaming should continue (run is still active).
+    _streaming = {"running", "paused"}
+
+    async def _handle_client_messages() -> None:
+        """Process incoming messages from the WebSocket client.
+
+        Supports ``{"action": "resume"}`` to unblock a paused plan run.
+        Any other messages are silently ignored.  Exits on disconnect or
+        parse error.
+        """
+        while True:
+            try:
+                msg = await websocket.receive_json()
+                if isinstance(msg, dict) and msg.get("action") == "resume":
+                    state.pause_event.set()
+            except Exception:  # noqa: BLE001 — disconnect or parse error
+                break
+
+    try:
+        # Replay history to late-joining clients.
+        for evt in history_snapshot:
+            await websocket.send_json(evt)
+
+        # If the plan already finished, drain the queue (may contain a terminal
+        # event that arrived between snapshot and queue registration) and exit.
+        if state.status not in _streaming:
+            while not queue.empty():
+                evt = queue.get_nowait()
+                if evt is not None:
+                    await websocket.send_json(evt)
+            await websocket.send_json({"type": "done", "plan_run_id": plan_run_id})
+            return
+
+        # Stream live events; also accept client messages concurrently.
+        client_task = asyncio.create_task(_handle_client_messages())
+        try:
+            while True:
+                try:
+                    evt = await asyncio.wait_for(queue.get(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    await websocket.send_json({"type": "ping", "plan_run_id": plan_run_id})
+                    continue
+
+                if evt is None:
+                    # Terminal sentinel — plan is complete or aborted.
+                    await websocket.send_json({"type": "done", "plan_run_id": plan_run_id})
+                    break
+
+                await websocket.send_json(evt)
+        finally:
+            client_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await client_task
 
     except Exception:  # noqa: BLE001 — client disconnect, network error, etc.
         pass

@@ -27,7 +27,8 @@
       "Bash(python -m orchestrator.cli plan next -d 'C:\\\\Users\\\\lucas\\\\AppData\\\\Local\\\\Temp\\\\tmpng5s9xmy')",
       "Bash(python -m orchestrator.cli plan reset 1.1.2 -d 'C:\\\\Users\\\\lucas\\\\AppData\\\\Local\\\\Temp\\\\tmpng5s9xmy' -y)",
       "Bash(python -m pytest tests/ -q --tb=no)",
-      "Bash(python -m pytest tests/test_plan_runner.py -v)"
+      "Bash(python -m pytest tests/test_plan_runner.py -v)",
+      "Bash(python -m pytest tests/test_server.py -v --tb=short)"
     ]
   }
 }

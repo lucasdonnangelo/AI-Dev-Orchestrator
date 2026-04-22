@@ -15,7 +15,9 @@ from starlette.websockets import WebSocketDisconnect
 from orchestrator.events import EventType
 from orchestrator.models import CycleRecord, CycleStatus, TaskPlan, Complexity
 from orchestrator.server import (
+    PlanRunState,
     RunState,
+    _active_plan_runs,
     _active_runs,
     _compute_metrics,
     _load_projects,
@@ -30,10 +32,12 @@ from orchestrator.server import (
 
 @pytest.fixture(autouse=True)
 def clear_active_runs():
-    """Reset in-memory run store between tests."""
+    """Reset in-memory run stores between tests."""
     _active_runs.clear()
+    _active_plan_runs.clear()
     yield
     _active_runs.clear()
+    _active_plan_runs.clear()
 
 
 @pytest.fixture()
@@ -776,3 +780,296 @@ class TestMountFrontend:
 
         with pytest.raises(Exception):
             mount_frontend(tmp_path / "nonexistent")
+
+
+# ---------------------------------------------------------------------------
+# PlanRunState dataclass
+# ---------------------------------------------------------------------------
+
+def _make_plan_run_state(state_id: str = "pr-1", status: str = "running") -> PlanRunState:
+    return PlanRunState(
+        id=state_id,
+        project_id="proj",
+        project_path=".",
+        plan_path="PLANO.md",
+        status=status,
+    )
+
+
+class TestPlanRunState:
+    def test_default_status_is_running(self):
+        state = _make_plan_run_state()
+        assert state.status == "running"
+
+    def test_pause_event_starts_set(self):
+        state = _make_plan_run_state()
+        assert state.pause_event.is_set()
+
+    def test_event_bus_run_id_matches_state_id(self):
+        state = _make_plan_run_state("my-plan-42")
+        assert state.event_bus.run_id == "my-plan-42"
+
+    def test_event_history_starts_empty(self):
+        state = _make_plan_run_state()
+        assert state.event_history == []
+
+    def test_client_queues_starts_empty(self):
+        state = _make_plan_run_state()
+        assert state._client_queues == []
+
+    def test_two_states_have_different_event_buses(self):
+        a = _make_plan_run_state("a")
+        b = _make_plan_run_state("b")
+        assert a.event_bus is not b.event_bus
+
+
+class TestPlanRunStateCapture:
+    """Tests for PlanRunState._on_plan_event (emitted via EventBus)."""
+
+    async def test_event_appended_to_history(self):
+        state = _make_plan_run_state("cap-pr-1")
+        await state.event_bus.emit(EventType.PLAN_LOADED, {"name": "MyPlan", "total_tasks": 5, "done_tasks": 0})
+        assert len(state.event_history) == 1
+        assert state.event_history[0]["type"] == "plan_loaded"
+
+    async def test_plan_loaded_updates_plan_name(self):
+        state = _make_plan_run_state("cap-pr-2")
+        await state.event_bus.emit(EventType.PLAN_LOADED, {"name": "FinanceAI", "total_tasks": 10, "done_tasks": 0})
+        assert state.plan_name == "FinanceAI"
+
+    async def test_task_started_updates_current_task_id(self):
+        state = _make_plan_run_state("cap-pr-3")
+        await state.event_bus.emit(EventType.TASK_STARTED, {"task_id": "1.1.1", "description": "...", "phase_id": "1", "subphase_id": "1.1", "attempt": 1})
+        assert state.current_task_id == "1.1.1"
+
+    async def test_task_done_increments_counter_and_clears_task(self):
+        state = _make_plan_run_state("cap-pr-4")
+        await state.event_bus.emit(EventType.TASK_STARTED, {"task_id": "1.1.1", "description": "...", "phase_id": "1", "subphase_id": "1.1", "attempt": 1})
+        await state.event_bus.emit(EventType.TASK_DONE, {"task_id": "1.1.1", "commit_hash": "abc1234", "score": 9, "duration_s": 12.5})
+        assert state.tasks_done == 1
+        assert state.current_task_id is None
+
+    async def test_task_escalated_increments_counter(self):
+        state = _make_plan_run_state("cap-pr-5")
+        await state.event_bus.emit(EventType.TASK_ESCALATED, {"task_id": "1.1.2", "reason": "max retries"})
+        assert state.tasks_escalated == 1
+
+    async def test_task_skipped_increments_counter(self):
+        state = _make_plan_run_state("cap-pr-6")
+        await state.event_bus.emit(EventType.TASK_SKIPPED, {"task_id": "1.1.3"})
+        assert state.tasks_skipped == 1
+
+    async def test_plan_paused_updates_status_and_reason(self):
+        state = _make_plan_run_state("cap-pr-7")
+        await state.event_bus.emit(EventType.PLAN_PAUSED, {"reason": "subphase", "context": {"done": 3}})
+        assert state.status == "paused"
+        assert state.pause_reason == "subphase"
+        assert state.pause_context == {"done": 3}
+
+    async def test_plan_resumed_resets_status_and_reason(self):
+        state = _make_plan_run_state("cap-pr-8")
+        await state.event_bus.emit(EventType.PLAN_PAUSED, {"reason": "phase", "context": {}})
+        await state.event_bus.emit(EventType.PLAN_RESUMED, {})
+        assert state.status == "running"
+        assert state.pause_reason is None
+        assert state.pause_context is None
+
+    async def test_plan_complete_sends_sentinel_to_queues(self):
+        state = _make_plan_run_state("cap-pr-9")
+        q: asyncio.Queue = asyncio.Queue()
+        state._client_queues.append(q)
+
+        await state.event_bus.emit(EventType.PLAN_COMPLETE, {"total": 5, "done": 5, "escalated": 0, "skipped": 0, "duration_s": 120.0})
+
+        # First item: the event dict
+        item = q.get_nowait()
+        assert item["type"] == "plan_complete"
+        # Second item: sentinel None
+        assert q.get_nowait() is None
+
+    async def test_plan_aborted_sends_sentinel_to_queues(self):
+        state = _make_plan_run_state("cap-pr-10")
+        q: asyncio.Queue = asyncio.Queue()
+        state._client_queues.append(q)
+
+        await state.event_bus.emit(EventType.PLAN_ABORTED, {"reason": "user cancelled"})
+
+        item = q.get_nowait()
+        assert item["type"] == "plan_aborted"
+        assert q.get_nowait() is None
+
+    async def test_event_forwarded_to_multiple_queues(self):
+        state = _make_plan_run_state("cap-pr-11")
+        q1: asyncio.Queue = asyncio.Queue()
+        q2: asyncio.Queue = asyncio.Queue()
+        state._client_queues.extend([q1, q2])
+
+        await state.event_bus.emit(EventType.TASK_STARTED, {"task_id": "1.1.1", "description": "...", "phase_id": "1", "subphase_id": "1.1", "attempt": 1})
+
+        assert q1.get_nowait()["type"] == "task_started"
+        assert q2.get_nowait()["type"] == "task_started"
+
+
+# ---------------------------------------------------------------------------
+# WebSocket /ws/plan/{plan_run_id}
+# ---------------------------------------------------------------------------
+
+class TestWebSocketPlanEndpoint:
+    def test_unknown_plan_run_sends_error_json(self, client: TestClient):
+        """Connecting to a non-existent plan_run_id gets an error message then close."""
+        import orchestrator.server as srv
+
+        original = srv._wait_for_plan_run
+
+        async def fast_none(plan_run_id: str, **_kw: Any) -> None:
+            return None
+
+        srv._wait_for_plan_run = fast_none
+        try:
+            with client.websocket_connect("/ws/plan/no-such-id") as ws:
+                msg = ws.receive_json()
+                assert msg["type"] == "error"
+                assert "not found" in msg["detail"]
+        except WebSocketDisconnect:
+            pass
+        finally:
+            srv._wait_for_plan_run = original
+
+    def test_history_replayed_to_late_client(self, client: TestClient):
+        """Events emitted before client connects are replayed from history."""
+        state = _make_plan_run_state("ws-pr-hist-1", status="complete")
+        state.event_history.append({
+            "type": "task_done",
+            "run_id": "ws-pr-hist-1",
+            "timestamp": "2026-01-01T00:00:00",
+            "data": {"task_id": "1.1.1", "commit_hash": "abc1234", "score": 9, "duration_s": 5.0},
+        })
+        _active_plan_runs["ws-pr-hist-1"] = state
+
+        received: list[dict] = []
+        with client.websocket_connect("/ws/plan/ws-pr-hist-1") as ws:
+            try:
+                while True:
+                    received.append(ws.receive_json())
+            except WebSocketDisconnect:
+                pass
+
+        assert any(m["type"] == "task_done" for m in received)
+
+    def test_finished_run_sends_done_and_closes(self, client: TestClient):
+        """A completed plan run streams history then sends {'type': 'done'} and closes."""
+        state = _make_plan_run_state("ws-pr-done-1", status="complete")
+        state.event_history.append({
+            "type": "plan_complete",
+            "run_id": "ws-pr-done-1",
+            "timestamp": "2026-01-01T00:00:00",
+            "data": {"total": 5, "done": 5, "escalated": 0, "skipped": 0, "duration_s": 60.0},
+        })
+        _active_plan_runs["ws-pr-done-1"] = state
+
+        received: list[dict] = []
+        with client.websocket_connect("/ws/plan/ws-pr-done-1") as ws:
+            try:
+                while True:
+                    received.append(ws.receive_json())
+            except WebSocketDisconnect:
+                pass
+
+        types = [m["type"] for m in received]
+        assert "plan_complete" in types
+        assert "done" in types
+
+    def test_aborted_run_sends_done_and_closes(self, client: TestClient):
+        """An aborted plan run sends {'type': 'done'} with plan_run_id."""
+        state = _make_plan_run_state("ws-pr-done-2", status="aborted")
+        state.event_history.append({
+            "type": "plan_aborted",
+            "run_id": "ws-pr-done-2",
+            "timestamp": "2026-01-01T00:00:00",
+            "data": {"reason": "user cancelled"},
+        })
+        _active_plan_runs["ws-pr-done-2"] = state
+
+        received: list[dict] = []
+        with client.websocket_connect("/ws/plan/ws-pr-done-2") as ws:
+            try:
+                while True:
+                    received.append(ws.receive_json())
+            except WebSocketDisconnect:
+                pass
+
+        types = [m["type"] for m in received]
+        assert "plan_aborted" in types
+        assert "done" in types
+
+    def test_empty_history_finished_run_just_sends_done(self, client: TestClient):
+        """A finished run with no events still sends {'type': 'done'}."""
+        state = _make_plan_run_state("ws-pr-done-3", status="complete")
+        _active_plan_runs["ws-pr-done-3"] = state
+
+        received: list[dict] = []
+        with client.websocket_connect("/ws/plan/ws-pr-done-3") as ws:
+            try:
+                while True:
+                    received.append(ws.receive_json())
+            except WebSocketDisconnect:
+                pass
+
+        assert received[-1]["type"] == "done"
+        assert received[-1]["plan_run_id"] == "ws-pr-done-3"
+
+    def test_client_queue_registered_and_cleaned_up(self, client: TestClient):
+        """The per-client queue is added on connect and removed on disconnect."""
+        state = _make_plan_run_state("ws-pr-q-1", status="complete")
+        _active_plan_runs["ws-pr-q-1"] = state
+
+        assert len(state._client_queues) == 0
+        with client.websocket_connect("/ws/plan/ws-pr-q-1") as ws:
+            try:
+                while True:
+                    ws.receive_json()
+            except WebSocketDisconnect:
+                pass
+        assert len(state._client_queues) == 0
+
+    def test_done_message_carries_plan_run_id(self, client: TestClient):
+        """The 'done' message includes the plan_run_id for client correlation."""
+        state = _make_plan_run_state("ws-pr-done-4", status="aborted")
+        _active_plan_runs["ws-pr-done-4"] = state
+
+        received: list[dict] = []
+        with client.websocket_connect("/ws/plan/ws-pr-done-4") as ws:
+            try:
+                while True:
+                    received.append(ws.receive_json())
+            except WebSocketDisconnect:
+                pass
+
+        done_msg = next(m for m in received if m["type"] == "done")
+        assert done_msg["plan_run_id"] == "ws-pr-done-4"
+
+    def test_multiple_history_events_replayed_in_order(self, client: TestClient):
+        """Multiple history events are replayed in insertion order."""
+        state = _make_plan_run_state("ws-pr-hist-2", status="complete")
+        for evt_type in ("plan_loaded", "task_started", "task_done", "plan_complete"):
+            state.event_history.append({
+                "type": evt_type,
+                "run_id": "ws-pr-hist-2",
+                "timestamp": "2026-01-01T00:00:00",
+                "data": {},
+            })
+        _active_plan_runs["ws-pr-hist-2"] = state
+
+        received: list[dict] = []
+        with client.websocket_connect("/ws/plan/ws-pr-hist-2") as ws:
+            try:
+                while True:
+                    received.append(ws.receive_json())
+            except WebSocketDisconnect:
+                pass
+
+        # Strip the trailing 'done' message and verify order
+        payload = [m for m in received if m["type"] != "done"]
+        assert [m["type"] for m in payload] == [
+            "plan_loaded", "task_started", "task_done", "plan_complete"
+        ]
