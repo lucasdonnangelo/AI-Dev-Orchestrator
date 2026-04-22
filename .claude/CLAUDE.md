@@ -63,10 +63,12 @@ Plano detalhado em: `docs/Fase6_Plano_Hierarquico.md`
 - CLI: `orchestrate plan status` / `plan next` / `plan reset TASK_ID`
 - `tests/test_plan.py` — 94 testes
 
-#### [>>] 6.2 Motor de Execucao por Plano (PROXIMA)
-- `orchestrator/plan_runner.py` — run_plan, contexto acumulado, pausa, retomada
+#### [OK] 6.2 Motor de Execucao por Plano (COMPLETA)
+- `orchestrator/plan_runner.py` — RunPlanOptions, run_plan, _build_phase_context, pausas, retomada idempotente
+- `orchestrator/plan.py` — fix: parser reconhece `[-]` como SKIPPED
+- `tests/test_plan_runner.py` — 32 testes. Total: 406 testes
 
-#### [ ] 6.3 Critic de Coerencia Entre Tasks
+#### [>>] 6.3 Critic de Coerencia Entre Tasks (PROXIMA)
 #### [ ] 6.4 Comando CLI Principal (plan run)
 #### [ ] 6.5 Geracao de Plano por IA (plan generate)
 

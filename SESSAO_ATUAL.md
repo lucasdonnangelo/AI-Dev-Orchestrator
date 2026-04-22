@@ -1,6 +1,6 @@
 # Sessao Atual — AI Dev Orchestrator
 
-**Ultima atualizacao:** 15/04/2026 (Fase 6.1 concluida — iniciando Fase 6.2)
+**Ultima atualizacao:** 15/04/2026 (Fase 6.2.1 concluida — iniciando Fase 6.2 restante / 6.3)
 **Branch:** main
 
 ---
@@ -53,8 +53,8 @@ Voce (task)
 | 5.4 — Frontend Execucao por Fases | planejamento incremental, kanban/timeline de progresso | PULADA (intencional) |
 | 5.5 — Frontend Historico e Metricas | graficos, diff viewer avancado, detalhes de ciclo | COMPLETA |
 | 6.1 — Parser e Modelo de Dados | plan.py (ProjectPlan/Phase/SubPhase/PlanTask), parse_plan, write_plan, CLI plan status/next/reset | COMPLETA |
-| 6.2 — Motor de Execucao por Plano | plan_runner.py, run_plan, contexto acumulado, pausa, retomada | PROXIMA |
-| 6.3 — Critic de Coerencia Entre Tasks | phase_context no critic, critic_system.md atualizado | PENDENTE |
+| 6.2 — Motor de Execucao por Plano | plan_runner.py, run_plan, contexto acumulado, pausa, retomada | COMPLETA |
+| 6.3 — Critic de Coerencia Entre Tasks | phase_context no critic, critic_system.md atualizado | PROXIMA |
 | 6.4 — Comando CLI Principal | orchestrate plan run (--phase/--subtask/--auto/--dry-run), output visual | PENDENTE |
 | 6.5 — Geracao de Plano por IA | project_planner.py, orchestrate plan generate | PENDENTE |
 
@@ -62,27 +62,26 @@ Voce (task)
 
 ## Ultima tarefa aprovada
 
-**Tarefa:** Fase 6.1 — Parser e Modelo de Dados (PLANO.md)
+**Tarefa:** Fase 6.2.1 — Motor de Execucao por Plano
 **Commits relevantes:**
-- `9ba8f42` feat: Phase 6.1.1 - hierarchical plan data model with lifecycle and serialization
-- `48a7cff` feat: Phase 6.1.2 - PLANO.md parser with regex-based hierarchy extraction
-- `8509f83` feat: Phase 6.1.3 - PLANO.md writer with in-place checkbox update and full render fallback
-- `b408797` feat: Phase 6.1 complete - plan status, next and reset CLI commands
+- `07d8e78` feat: Phase 6.2 complete - plan execution engine with context, pause and resume
 
-**O que foi implementado (Fase 6.1):**
-- `orchestrator/plan.py` — modulo completo com:
-  - `PlanTaskStatus` (pending/running/done/escalated/skipped)
-  - `PlanTask` — task atomica com lifecycle (mark_running/done/escalated/skipped/reset)
-  - `SubPhase`, `Phase`, `ProjectPlan` — hierarquia com helpers de navegacao e progresso
-  - `parse_plan(path)` / `parse_plan_text(text)` — parser Markdown (regex linha-a-linha)
-  - `write_plan(plan, path)` — writer in-place (so atualiza checkboxes, preserva formatacao)
-  - `_render_plan(plan)` — geracao de PLANO.md do zero (fallback se arquivo nao existe)
-- `orchestrator/cli.py` — grupo `plan` com subcomandos:
-  - `orchestrate plan status [-d dir]` — tabela hierarquica com progresso por fase/subfase
-  - `orchestrate plan next [-d dir]` — proxima task pendente com contexto de localizacao
-  - `orchestrate plan reset TASK_ID [-d dir] [-y]` — reseta task para pending no PLANO.md
-- `tests/test_plan.py` — 94 testes (modelos, lifecycle, serializacao, parser, writer)
-- Total: 374 testes passando
+**O que foi implementado (Fase 6.2):**
+- `orchestrator/plan_runner.py` — modulo completo com:
+  - `RunPlanOptions` — filtros (phase/subtask), modos (dry_run/auto_continue), pausas configuráveis, flags (yes/quiet/verbose)
+  - `TaskResult` / `RunPlanResult` — resultado por task e agregado com propriedades (success, total_processed)
+  - `run_plan(plan_path, config, options)` — loop assincrono principal:
+    - Pula tasks done/skipped silenciosamente (idempotencia)
+    - Tasks escalated: prompt retry/skip/abort
+    - Marca running -> executa run_cycle -> marca done/escalated -> persiste PLANO.md apos cada estado
+    - Contexto acumulado da fase injetado no argumento task (nao acopla planner.py)
+    - Pausas ao fim de subfase e fase com confirmacao humana e resumo visual
+    - _StopExecution para interrompimento limpo sem encerrar o processo
+  - `_build_phase_context(plan, task)` — gera Markdown com tasks concluidas na mesma fase
+  - Helpers: boundary detection, display de summaries (subfase, fase, geral)
+- `orchestrator/plan.py` — fix: parser agora reconhece `[-]` como SKIPPED (roundtrip consistente)
+- `tests/test_plan_runner.py` — 32 testes (RunPlanResult, filtros, boundaries, contexto, dry_run, idempotencia, execucao, escalacao)
+- Total: 406 testes passando
 
 ---
 
@@ -358,12 +357,14 @@ CycleRecord    -- task, status, plan, review, decision, attempt,
 
 ## Proximos passos imediatos
 
-1. **Fase 6.2 — Motor de Execucao por Plano:**
-   - Criar `orchestrator/plan_runner.py` com `run_plan(plan_path, config, project_dir, options)`
-   - Identificar proxima task pendente, executar `run_cycle`, atualizar PLANO.md via `write_plan`
-   - Contexto acumulado entre tasks da mesma fase/subfase (tasks concluidas + commits)
-   - Pausa configuravel ao fim de cada subfase/fase com resumo e confirmacao humana
-   - Retomada idempotente: tasks `done` puladas, `escalated` pergunta se retenta ou pula
+1. **Fase 6.3 — Critic de Coerencia Entre Tasks:**
+   - Modificar `critic.py` para aceitar `phase_context: str | None`
+   - Atualizar `critic_system.md` com criterio de coerencia entre tasks
+   - Gerar `phase_context` em `plan_runner.py` antes de cada ciclo
+
+2. **Fase 6.4 — Comando CLI Principal:**
+   - `orchestrate plan run [-d dir] [--phase] [--subtask] [--auto] [--dry-run]`
+   - Output visual de progresso em tempo real
 
 Plano detalhado: `docs/Fase6_Plano_Hierarquico.md`
 
