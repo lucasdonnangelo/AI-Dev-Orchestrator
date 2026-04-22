@@ -50,10 +50,11 @@ Voce (task)
 ### [OK] Fase 4 — Extensibilidade (COMPLETA)
 ### [OK] Fase 5 — Dashboard Visual (COMPLETA — 5.4 pulada intencionalmente)
 ### [OK] Fase 6 — Orquestracao por Plano Hierarquico (COMPLETA)
+### [>] Fase 7 — Dashboard para Execucao por Plano Hierarquico (EM ANDAMENTO)
 
-453 testes passando. 6/6 tasks do batch cobaia aprovadas. Sistema validado end-to-end.
+468 testes passando. 7.1.1 e 7.1.2 concluidas.
 
-Plano detalhado em: `docs/Fase6_Plano_Hierarquico.md`
+Plano detalhado em: `docs/Fase7_Dashboard_Plano_Hierarquico.md`
 
 #### [OK] 6.1 Parser e Modelo de Dados
 - `orchestrator/plan.py` — PlanTaskStatus, PlanTask, SubPhase, Phase, ProjectPlan
@@ -79,6 +80,14 @@ Plano detalhado em: `docs/Fase6_Plano_Hierarquico.md`
 - `orchestrator/prompts/plan_critic_system.md` — prompt de avaliacao estrutural do plano hierarquico
 - `orchestrate plan generate DESCRIPTION [-p PREMISES] [-s STACK] [-y] [--no-critic]`
 
+#### [OK] 7.1.1 — Novos tipos de evento no EventBus
+- `orchestrator/events.py` — 11 novos EventType para o plan runner: PLAN_LOADED, TASK_STARTED, TASK_DONE, TASK_ESCALATED, TASK_SKIPPED, SUBPHASE_COMPLETE, PHASE_COMPLETE, PLAN_PAUSED, PLAN_RESUMED, PLAN_COMPLETE, PLAN_ABORTED
+- Docstring atualizada com payload reference para os novos tipos
+
+#### [OK] 7.1.2 — Endpoints REST para plan runner
+- `orchestrator/plan_runner.py` — `run_plan` aceita `event_bus` e `pause_event` opcionais; emite eventos em cada etapa; `_maybe_pause_boundaries` e async; pause semantica "after current task"
+- `orchestrator/server.py` — `PlanRunState` dataclass; `_active_plan_runs`; `_run_plan_bg`; 8 endpoints: POST/GET /api/plan/run, POST /api/plan/pause|resume|abort/{id}, GET /api/plan/load, POST /api/plan/generate, POST /api/plan/save
+
 ## Estrutura do Projeto
 
 ```
@@ -100,10 +109,10 @@ ai-dev-orchestrator/
 │   ├── metrics.py            # [OK] Analytics
 │   ├── session.py            # [OK] SESSAO_ATUAL.md automatizado
 │   ├── templates.py          # [OK] Templates de projeto
-│   ├── events.py             # [OK] EventBus
-│   ├── server.py             # [OK] FastAPI backend
+│   ├── events.py             # [OK] EventBus + 11 plan runner EventTypes (Fase 7)
+│   ├── server.py             # [OK] FastAPI backend + /api/plan/* endpoints (Fase 7)
 │   ├── plan.py               # [OK] Modelo hierarquico + parse_plan + write_plan (Fase 6)
-│   ├── plan_runner.py        # [OK] Motor de execucao por plano (Fase 6)
+│   ├── plan_runner.py        # [OK] Motor de execucao + event_bus/pause_event API (Fase 7)
 │   ├── project_planner.py    # [OK] Geracao de PLANO.md por IA + loop Critic (Fase 6.5)
 │   ├── providers/
 │   │   ├── __init__.py       # [OK] Factory + plugin registry
@@ -119,7 +128,7 @@ ai-dev-orchestrator/
 ├── docs/
 │   ├── AI_Dev_Orchestrator_Plano.md
 │   └── Fase5_Dashboard_Plano.md
-├── tests/                    # [OK] 453 testes
+├── tests/                    # [OK] 468 testes
 └── ...
 ```
 
@@ -138,6 +147,7 @@ ai-dev-orchestrator/
 
 - Plano geral: `docs/AI_Dev_Orchestrator_Plano.md`
 - Plano Fase 5: `docs/Fase5_Dashboard_Plano.md`
+- Plano Fase 7: `docs/Fase7_Dashboard_Plano_Hierarquico.md`
 - Anthropic SDK: https://github.com/anthropics/anthropic-sdk-python
 - Claude Agent SDK: https://pypi.org/project/claude-agent-sdk/
 - Google GenAI SDK: https://github.com/googleapis/python-genai

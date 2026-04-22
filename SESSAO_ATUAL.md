@@ -1,6 +1,6 @@
 # Sessao Atual — AI Dev Orchestrator
 
-**Ultima atualizacao:** 22/04/2026 (Fase 6.5 concluida — Fase 6 completa)
+**Ultima atualizacao:** 22/04/2026 (Fase 7.1.1 e 7.1.2 concluidas)
 **Branch:** main
 
 ---
@@ -58,42 +58,48 @@ Voce (task)
 | 6.3 — Critic de Coerencia Entre Tasks | phase_context no critic, critic_system.md atualizado | COMPLETA |
 | 6.4 — Comando CLI Principal | orchestrate plan run (--phase/--subtask/--auto/--dry-run), output visual | COMPLETA |
 | 6.5 — Geracao de Plano por IA | project_planner.py, plan_critic_system.md, orchestrate plan generate | COMPLETA |
+| 7.1.1 — Novos tipos de evento no EventBus | 11 EventTypes para plan runner em events.py | COMPLETA |
+| 7.1.2 — Endpoints REST para plan runner | PlanRunState, _run_plan_bg, 8 endpoints /api/plan/*, pause semantica "after current task" | COMPLETA |
 
 ---
 
 ## Ultima tarefa aprovada
 
-**Tarefa:** Fase 6.5 — Geracao de Plano por IA (completa)
+**Tarefa:** Fase 7.1.2 — Endpoints REST para plan runner
 **Commits relevantes:**
-- `b52cbd4` feat: Phase 6.5.1 - project plan generator agent with specialized system prompt
-- `324ff9a` feat: Phase 6.5.2 - Plan Critic loop for project plan validation and refinement
-- `39d0373` feat: Phase 6.5 complete - orchestrate plan generate with Critic loop and interactive approval
+- `e0a81dd` feat: Phase 7.1.1 - plan runner event types for hierarchical execution streaming
+- `7233669` feat: Phase 7.1.2 - plan run REST endpoints with pause/resume and event emission
 
-**O que foi implementado (Fase 6.5):**
+**O que foi implementado (Fase 7.1):**
 
-**6.5.1 — Agente Planejador de Projeto:**
-- `orchestrator/project_planner.py`:
-  - `generate_project_plan(description, config, premises, stack)` — chama Claude com prompt especializado, retorna `(raw_md, ProjectPlan)`
-  - `_strip_outer_fence(text)` — remove code fence se o modelo envolver a saida
-  - `_build_user_message(description, premises, stack)` — monta prompt com campos opcionais
-- `orchestrator/prompts/project_planner_system.md` — prompt especializado: formato exato do PLANO.md, regras de task (imperativo, atomico, concreto), ordem de fases recomendada
+**7.1.1 — Novos tipos de evento:**
+- `orchestrator/events.py` — 11 novos `EventType` com comentario de secao separado:
+  PLAN_LOADED, TASK_STARTED, TASK_DONE, TASK_ESCALATED, TASK_SKIPPED,
+  SUBPHASE_COMPLETE, PHASE_COMPLETE, PLAN_PAUSED, PLAN_RESUMED, PLAN_COMPLETE, PLAN_ABORTED
+- Docstring do modulo expandida com payload reference para cada tipo
+- 15 novos testes em `tests/test_events.py` (classe `TestPlanRunnerEvents`)
 
-**6.5.2 — Critic do Plano de Projeto:**
-- `orchestrator/prompts/plan_critic_system.md` — prompt para avaliar PLANO.md hierarquico (7 criterios: Completeness, Structure, Granularity, Coherence, Testability, Clarity, Feasibility)
-- `orchestrator/critic.py` — `critique_project_plan(raw_md, config, round_num, description)` com role `"plan_critic"`
-- `orchestrator/project_planner.py`:
-  - `refine_project_plan(description, raw_md, critic_result, config, premises, stack)` — refina PLANO.md com base no feedback
-  - `run_project_plan_critic_loop(description, raw_md, plan, config, ...)` — loop iterativo Project Planner <-> Plan Critic respeitando `critic_min/max_rounds`
+**7.1.2 — Endpoints REST + mecanismo de pause:**
+- `orchestrator/plan_runner.py`:
+  - `run_plan` aceita `event_bus: EventBus | None` e `pause_event: asyncio.Event | None`
+  - Emite PLAN_LOADED, TASK_STARTED, TASK_DONE, TASK_ESCALATED, TASK_SKIPPED, PLAN_COMPLETE em pontos certos
+  - `_maybe_pause_boundaries` e async; em modo API emite SUBPHASE_COMPLETE/PHASE_COMPLETE + PLAN_PAUSED e aguarda `pause_event`
+  - Per-task pause check no topo do loop: POST /api/plan/pause/{id} pausa apos a task atual (nao apenas em boundaries naturais)
+  - Fix: `yes=True` nao bypassa mais o mecanismo de pause em modo API
+- `orchestrator/server.py`:
+  - `PlanRunState` — dataclass com event_bus, pause_event (inicia set), event_history, fan-out WS; subscriber `_on_plan_event` mantém status/current_task_id/pause_reason em sync
+  - `_active_plan_runs: dict[str, PlanRunState]`
+  - `_run_plan_bg` — background task; trata CancelledError -> PLAN_ABORTED
+  - Modelos Pydantic: `PlanRunRequest`, `PlanGenerateRequest`, `PlanSaveRequest`
+  - 8 endpoints: POST /api/plan/run, GET /api/plan/run/{id}, POST /api/plan/pause|resume|abort/{id}, GET /api/plan/load, POST /api/plan/generate, POST /api/plan/save
 
-**6.5.3 — Comando CLI:**
-- `orchestrator/cli.py` — `orchestrate plan generate DESCRIPTION [-d DIR] [-p PREMISES] [-s STACK] [-y] [--no-critic]`
-  - Fluxo: gera -> critica -> exibe preview Rich -> `[y/n/edit]` -> salva PLANO.md
-  - `edit`: abre `$EDITOR`, re-valida Markdown, salva
-  - `-y`: auto-aprova sem prompts
-  - `--no-critic`: pula loop Critic
-  - Apos salvar: oferece iniciar execucao imediatamente
+**Semantica de pause (documentada para 7.1.3):**
+- `reason: "requested"` — usuario clicou Pausar; pausa antes da proxima task
+- `reason: "subphase"` — pausa automatica no fim de subfase
+- `reason: "phase"` — pausa automatica no fim de fase
+- Task em andamento nunca e interrompida; pause_event e verificado antes de iniciar a proxima
 
-- Total: 453 testes passando
+- Total: 468 testes passando
 
 ---
 
@@ -265,9 +271,20 @@ Endpoints REST:
   POST   /api/init                  cria projeto de template
   GET    /api/health                health check
 
+Plan runner endpoints (Fase 7):
+  POST   /api/plan/run              inicia run_plan hierarquico, retorna plan_run_id
+  GET    /api/plan/run/{id}         estado atual (status, current_task_id, pause_reason, contadores)
+  POST   /api/plan/pause/{id}       pausa apos a task atual (limpa pause_event)
+  POST   /api/plan/resume/{id}      retoma execucao pausada (seta pause_event)
+  POST   /api/plan/abort/{id}       aborta via task.cancel()
+  GET    /api/plan/load             parse PLANO.md do projeto, retorna hierarquia serializada
+  POST   /api/plan/generate         gera PLANO.md via IA + loop Critic (aguarda sincronamente)
+  POST   /api/plan/save             salva conteudo PLANO.md no projeto
+
 WebSocket:
   WS /ws/run/{run_id}  -- streaming de eventos + history replay + keepalive 30s
                           reconexao automatica no frontend (5x / backoff 2s)
+  WS /ws/plan/{plan_run_id}  -- [7.1.3 — pendente] streaming de eventos do plan runner
 
 Projetos registrados: ~/.orchestrator/projects.json
 RunState: in-memory, suporta multiplos clients WS por run
@@ -369,9 +386,13 @@ CycleRecord    -- task, status, plan, review, decision, attempt,
 
 ## Proximos passos imediatos
 
-**Fase 6 completa.** Proximas iniciativas a definir.
+**Fase 7 em andamento.** Proxima task: **7.1.3 — WebSocket `/ws/plan/{plan_run_id}`**
+- Streaming de eventos do plan runner em tempo real
+- History replay ao reconectar (mesmo padrao do /ws/run/{run_id})
+- Keepalive 30s
+- Suporte a mensagem `{ "action": "resume" }` do cliente para desbloquear pausa
 
-Plano detalhado: `docs/Fase6_Plano_Hierarquico.md`
+Plano detalhado: `docs/Fase7_Dashboard_Plano_Hierarquico.md`
 
 ---
 
