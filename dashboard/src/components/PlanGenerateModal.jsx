@@ -145,8 +145,7 @@ export default function PlanGenerateModal({ projects, initialProjectId, onClose,
         ...(premises.trim() && { premises: premises.trim() }),
       }
       const data = await api.post('/api/plan/generate', body)
-      // Server may return { plan_text, content, or just a string }
-      const text = data?.plan_text ?? data?.content ?? (typeof data === 'string' ? data : '')
+      const text = data?.raw_md ?? ''
       setPlanText(text)
       setEditText(text)
       setPhase('preview')
