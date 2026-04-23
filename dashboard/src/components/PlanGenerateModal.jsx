@@ -149,8 +149,8 @@ export default function PlanGenerateModal({ projects, initialProjectId, onClose,
       setPlanText(text)
       setEditText(text)
       setPhase('preview')
-    } catch (e) {
-      setError(e.message ?? 'Generation failed.')
+    } catch (err) {
+      setError(err.message || 'Failed to generate plan.')
       setPhase('form')
     }
   }
@@ -279,7 +279,7 @@ export default function PlanGenerateModal({ projects, initialProjectId, onClose,
 
           {/* ── PREVIEW phase ───────────────────────────────────────────── */}
           {phase === 'preview' && (
-            <div className="bg-gray-800/40 border border-gray-800 rounded-xl px-5 py-4 min-h-48">
+            <div className="bg-gray-800/40 border border-gray-800 rounded-xl px-5 py-4 min-h-48 overflow-y-auto max-h-[60vh]">
               <MarkdownPreview text={planText} />
             </div>
           )}
