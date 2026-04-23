@@ -1,6 +1,6 @@
 # Sessao Atual — AI Dev Orchestrator
 
-**Ultima atualizacao:** 23/04/2026 (Fase 7.2 iniciada — 7.2.1 concluida)
+**Ultima atualizacao:** 23/04/2026 (Fase 7 completa — 7.2 e 7.3 concluidas)
 **Branch:** main
 
 ---
@@ -62,31 +62,34 @@ Voce (task)
 | 7.1.2 — Endpoints REST para plan runner | PlanRunState, _run_plan_bg, 8 endpoints /api/plan/*, pause semantica "after current task" | COMPLETA |
 | 7.1.3 — WebSocket /ws/plan/{plan_run_id} | _wait_for_plan_run, ws_plan: history replay, streaming, keepalive, resume action, sentinel done | COMPLETA |
 | 7.2.1 — Hook usePlanSocket | dashboard/src/hooks/usePlanSocket.js: WS /ws/plan/{id}, reducer, reconexao 5x/2s, resume()/abort() | COMPLETA |
+| 7.2.2 — Layout da pagina /plan | Plan.jsx + PlanRun.jsx: header + sidebar PlanTree (w-72) + painel central; stubs iniciais dos componentes | COMPLETA |
+| 7.2.3 — Arvore do plano (PlanTree) | PlanTree.jsx: Phase/SubPhase/Task colapsavel, status icons, auto-expand/scroll, commit hash on hover | COMPLETA |
+| 7.2.4 — Painel central (PlanExecutionPanel) | PlanExecutionPanel.jsx: AgentCards via useRunSocket, flash result 2s, attempt badge, CompleteView | COMPLETA |
+| 7.2.5 — Painel de pausa (PlanPausePanel) | PlanPausePanel.jsx: NormalPausePanel + EscalationPanel (Tentar novamente/Pular task/Abortar) | COMPLETA |
+| 7.2.6 — Modal de execucao (PlanRunModal) | PlanRunModal.jsx: scope Full/Fase/Subfase, pause options, POST /api/plan/run | COMPLETA |
+| 7.3.1 — Rota e Sidebar | PlanRunContext.jsx, App.jsx wrapped, Sidebar badge verde/amarelo por status | COMPLETA |
+| 7.3.2 — Geracao de plano via dashboard | PlanGenerateModal.jsx: form > loading rotativo > preview Markdown > edit > save | COMPLETA |
+| 7.3.3 — Link de plan run no historico | History.jsx: coluna Plan + badge clicavel no modal de detalhe | COMPLETA |
 
 ---
 
 ## Ultima tarefa aprovada
 
-**Tarefa:** Fase 7.2.1 — Hook `usePlanSocket` + run_id no TASK_STARTED
+**Tarefa:** Fase 7 completa — Dashboard para Execucao por Plano Hierarquico (7.2.2 a 7.3.3)
 
 **O que foi implementado:**
 
-- `orchestrator/plan_runner.py`:
-  - `import uuid` adicionado
-  - `_task_run_id = str(uuid.uuid4())` gerado por task antes do emit
-  - `"run_id": _task_run_id` adicionado ao payload do `EventType.TASK_STARTED`
+- `dashboard/src/pages/Plan.jsx` — pagina idle com seletor de projeto, botoes "Generate with AI" e "Start Execution", link "Generate one with AI" no empty state
+- `dashboard/src/pages/PlanRun.jsx` — layout 3 zonas (header + PlanTree lateral + painel central); integra usePlanSocket e PlanRunContext
+- `dashboard/src/components/PlanTree.jsx` — arvore Phase > SubPhase > Task colapsavel; status icons pulsantes; auto-expand da fase ativa; auto-scroll da task ativa; commit hash no hover via group-hover
+- `dashboard/src/components/PlanExecutionPanel.jsx` — CurrentTaskCard com breadcrumb e attempt badge; AgentCards via useRunSocket(currentRunId); flash result 2s na transicao; CompleteView com commits e botoes
+- `dashboard/src/components/PlanPausePanel.jsx` — NormalPausePanel (subphase/phase/requested) e EscalationPanel com botoes Tentar novamente / Pular task / Abortar
+- `dashboard/src/components/PlanRunModal.jsx` — scope radio (Full/Fase/Subfase) com input condicional; pause options; POST /api/plan/run
+- `dashboard/src/components/PlanGenerateModal.jsx` — maquina de estados form > loading (mensagens rotativas 3s) > preview (MarkdownPreview inline) > editing; POST /api/plan/generate + /api/plan/save
+- `dashboard/src/context/PlanRunContext.jsx` — Context global; PlanRun.jsx sincroniza status; Sidebar.jsx exibe badge verde (running) ou amarelo (paused)
+- `dashboard/src/pages/History.jsx` — coluna "Plan" com badge clicavel (plan_run_id/plan_task_id); referencia no CycleDetailModal header
 
-- `dashboard/src/hooks/usePlanSocket.js` (arquivo novo):
-  - Conecta ao `WS /ws/plan/{planRunId}` seguindo o mesmo padrao de `useRunSocket`
-  - Reducer com 13 casos de evento: `plan_loaded`, `task_started`, `task_done`, `task_escalated`, `task_skipped`, `plan_paused`, `plan_resumed`, `plan_complete`, `plan_aborted`, `done`, `ping`, `error`, default
-  - Estado exposto: `plan`, `status`, `currentTaskId`, `currentRunId`, `pauseReason`, `pauseContext`, `results`, `wsError`
-  - `currentRunId` populado do `run_id` no evento `task_started`; limpo em `task_done`/`task_escalated`
-  - `resume()`: envia `{"action":"resume"}` via WS se aberto, fallback para `POST /api/plan/resume/{id}`
-  - `abort()`: `POST /api/plan/abort/{id}`
-  - Reconexao automatica: 5x / backoff 2s com `WS_RESET` antes de cada tentativa
-  - `useLayoutEffect` para sync de refs (evita lint `react-hooks/refs`)
-
-**Testes:** 493 passando (sem novos testes Python necessarios — mudanca de payload nao quebra testes existentes)
+**Testes:** 493 passando (Fase 7 e pura frontend — sem novos testes Python)
 
 ---
 
@@ -373,10 +376,16 @@ CycleRecord    -- task, status, plan, review, decision, attempt,
 
 ## Proximos passos imediatos
 
-**Fase 7 em andamento. Sub-fase 7.1 completa. 7.2.1 completa.** Proxima task: **7.2.2 — Layout da pagina `/plan`**
-- Criar `dashboard/src/pages/Plan.jsx` e `dashboard/src/pages/PlanRun.jsx`
-- Layout 3 zonas: header com progresso, arvore lateral (PlanTree), painel central (PlanExecutionPanel)
-- Integrar `usePlanSocket` para estado em tempo real
+**Fase 7 completa.** Todas as sub-fases 7.1, 7.2 e 7.3 foram concluidas.
+
+O dashboard agora cobre o ciclo completo de execucao por plano hierarquico:
+- Gerar PLANO.md via IA (Claude planeja, Gemini revisa)
+- Visualizar a arvore do plano com status em tempo real
+- Acompanhar execucao task por task com streaming de agentes
+- Pausar/retomar/abortar via interface visual
+- Consultar historico com referencia ao plan run de origem
+
+Proximas possibilidades: otimizacoes de UX, testes E2E do dashboard, ou novas fases do plano geral.
 
 Plano detalhado: `docs/Fase7_Dashboard_Plano_Hierarquico.md`
 

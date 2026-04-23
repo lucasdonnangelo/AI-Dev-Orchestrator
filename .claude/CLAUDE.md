@@ -50,9 +50,9 @@ Voce (task)
 ### [OK] Fase 4 — Extensibilidade (COMPLETA)
 ### [OK] Fase 5 — Dashboard Visual (COMPLETA — 5.4 pulada intencionalmente)
 ### [OK] Fase 6 — Orquestracao por Plano Hierarquico (COMPLETA)
-### [>] Fase 7 — Dashboard para Execucao por Plano Hierarquico (EM ANDAMENTO)
+### [OK] Fase 7 — Dashboard para Execucao por Plano Hierarquico (COMPLETA)
 
-493 testes passando. 7.1.1, 7.1.2, 7.1.3 e 7.2.1 concluidas.
+493 testes passando. Todas as sub-fases concluidas.
 
 Plano detalhado em: `docs/Fase7_Dashboard_Plano_Hierarquico.md`
 
@@ -96,6 +96,35 @@ Plano detalhado em: `docs/Fase7_Dashboard_Plano_Hierarquico.md`
 - `orchestrator/plan_runner.py` — `import uuid`; `_task_run_id = str(uuid.uuid4())` por task; `"run_id"` adicionado ao payload de `TASK_STARTED`
 - `dashboard/src/hooks/usePlanSocket.js` — reducer com 13 eventos do plan runner; reconexao 5x/2s; `currentRunId` populado do `run_id` do `task_started`; `resume()` via WS (fallback REST); `abort()` via REST
 
+#### [OK] 7.2.2 — Layout da pagina /plan
+- `dashboard/src/pages/Plan.jsx` — seletor de projeto, carrega GET /api/plan/load, PlanTree read-only, botoes "Generate with AI" e "Start Execution"
+- `dashboard/src/pages/PlanRun.jsx` — layout 3 zonas: header (nome + status + progresso + controles) | sidebar w-72 (PlanTree) | centro (PlanExecutionPanel ou PlanPausePanel)
+- Stubs iniciais criados para PlanTree, PlanExecutionPanel, PlanPausePanel, PlanRunModal
+
+#### [OK] 7.2.3 — Arvore do plano (PlanTree)
+- `dashboard/src/components/PlanTree.jsx` — hierarquia Phase > SubPhase > Task com chevron collapse, status icons (pending/running/done/escalated/skipped), contador X/Y por fase e subfase, auto-expand da fase ativa via useEffect, auto-scroll da task ativa, commit hash on hover via group-hover
+
+#### [OK] 7.2.4 — Painel central de execucao (PlanExecutionPanel)
+- `dashboard/src/components/PlanExecutionPanel.jsx` — estados: idle/connecting, running (CurrentTaskCard + AgentCards via useRunSocket(currentRunId)), flash result 2s apos task completar, attempt badge do evento execute_started, CompleteView com commits + botoes acao
+
+#### [OK] 7.2.5 — Painel de pausa (PlanPausePanel)
+- `dashboard/src/components/PlanPausePanel.jsx` — NormalPausePanel (subphase/phase/requested): stats + commits + Continue/Abort; EscalationPanel: card vermelho + Tentar novamente/Pular task(disabled)/Abortar
+
+#### [OK] 7.2.6 — Modal de configuracao de execucao (PlanRunModal)
+- `dashboard/src/components/PlanRunModal.jsx` — scope selector radio (Full/Fase/Subfase) com input condicional, pause options, POST /api/plan/run com phase/subtask opcionais, validacao e redirect
+
+#### [OK] 7.3.1 — Rota e Sidebar
+- `dashboard/src/context/PlanRunContext.jsx` — Context com activePlanRunId + activePlanStatus, setActivePlanRun/clearActivePlanRun via useCallback
+- `dashboard/src/App.jsx` — rotas /plan e /plan/:planRunId; wrapped com PlanRunProvider
+- `dashboard/src/components/Sidebar.jsx` — PlanBadge: dot verde animate-pulse (running) ou dot amarelo (paused) no item "Plan"
+- `dashboard/src/pages/PlanRun.jsx` — sincroniza status ao context via useEffect; limpa no unmount
+
+#### [OK] 7.3.2 — Geracao de plano via dashboard
+- `dashboard/src/components/PlanGenerateModal.jsx` — maquina de estados form > loading > preview > editing; LoadingView com mensagens rotativas a cada 3s; MarkdownPreview inline (h1/h2/h3/tasks/bullets sem biblioteca); POST /api/plan/generate + POST /api/plan/save
+
+#### [OK] 7.3.3 — Link de plan run no historico
+- `dashboard/src/pages/History.jsx` — coluna "Plan" na tabela (badge indigo clicavel com plan_task_id, stopPropagation); referencia no CycleDetailModal header; design defensivo (entry.plan_run_id opcional)
+
 ## Estrutura do Projeto
 
 ```
@@ -130,13 +159,25 @@ ai-dev-orchestrator/
 │   │   ├── openai.py         # [OK] OpenAIProvider
 │   │   └── retry.py          # [OK] Retry com backoff
 │   └── prompts/              # [OK] System prompts (6 arquivos)
-├── dashboard/                # [OK] React + Vite (5.2–5.5)
+├── dashboard/                # [OK] React + Vite (5.2–5.5 + Fase 7)
+│   └── src/
+│       ├── context/
+│       │   └── PlanRunContext.jsx    # [OK] Context global de plan run ativo (Fase 7)
+│       ├── pages/
+│       │   ├── Plan.jsx              # [OK] Pagina /plan (idle + generate + start) (Fase 7)
+│       │   └── PlanRun.jsx           # [OK] Pagina /plan/:id (execucao em tempo real) (Fase 7)
+│       └── components/
+│           ├── PlanTree.jsx          # [OK] Arvore hierarquica colapsavel (Fase 7)
+│           ├── PlanExecutionPanel.jsx# [OK] Painel central de execucao (Fase 7)
+│           ├── PlanPausePanel.jsx    # [OK] Painel de pausa normal + escalacao (Fase 7)
+│           ├── PlanRunModal.jsx      # [OK] Modal configuracao de execucao (Fase 7)
+│           └── PlanGenerateModal.jsx # [OK] Modal geracao de plano com IA (Fase 7)
 ├── configs/
 ├── logs/
 ├── docs/
 │   ├── AI_Dev_Orchestrator_Plano.md
 │   └── Fase5_Dashboard_Plano.md
-├── tests/                    # [OK] 468 testes
+├── tests/                    # [OK] 493 testes
 └── ...
 ```
 
