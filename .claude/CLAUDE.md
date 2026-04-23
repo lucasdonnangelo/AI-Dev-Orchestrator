@@ -52,7 +52,7 @@ Voce (task)
 ### [OK] Fase 6 — Orquestracao por Plano Hierarquico (COMPLETA)
 ### [>] Fase 7 — Dashboard para Execucao por Plano Hierarquico (EM ANDAMENTO)
 
-493 testes passando. 7.1.1, 7.1.2 e 7.1.3 concluidas.
+493 testes passando. 7.1.1, 7.1.2, 7.1.3 e 7.2.1 concluidas.
 
 Plano detalhado em: `docs/Fase7_Dashboard_Plano_Hierarquico.md`
 
@@ -91,6 +91,10 @@ Plano detalhado em: `docs/Fase7_Dashboard_Plano_Hierarquico.md`
 #### [OK] 7.1.3 — WebSocket /ws/plan/{plan_run_id}
 - `orchestrator/server.py` — `_wait_for_plan_run`; `ws_plan`: history replay, streaming em tempo real, keepalive 30s, `{"action": "resume"}` desbloqueia pausa, `{"type": "done"}` em eventos terminais, cleanup de queue no finally
 - 25 novos testes: `TestPlanRunState`, `TestPlanRunStateCapture` (11 casos async via EventBus), `TestWebSocketPlanEndpoint` (8 casos WS)
+
+#### [OK] 7.2.1 — Hook usePlanSocket
+- `orchestrator/plan_runner.py` — `import uuid`; `_task_run_id = str(uuid.uuid4())` por task; `"run_id"` adicionado ao payload de `TASK_STARTED`
+- `dashboard/src/hooks/usePlanSocket.js` — reducer com 13 eventos do plan runner; reconexao 5x/2s; `currentRunId` populado do `run_id` do `task_started`; `resume()` via WS (fallback REST); `abort()` via REST
 
 ## Estrutura do Projeto
 

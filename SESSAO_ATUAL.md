@@ -1,6 +1,6 @@
 # Sessao Atual — AI Dev Orchestrator
 
-**Ultima atualizacao:** 22/04/2026 (Fase 7.1 completa — 7.1.1, 7.1.2 e 7.1.3 concluidas)
+**Ultima atualizacao:** 23/04/2026 (Fase 7.2 iniciada — 7.2.1 concluida)
 **Branch:** main
 
 ---
@@ -61,38 +61,32 @@ Voce (task)
 | 7.1.1 — Novos tipos de evento no EventBus | 11 EventTypes para plan runner em events.py | COMPLETA |
 | 7.1.2 — Endpoints REST para plan runner | PlanRunState, _run_plan_bg, 8 endpoints /api/plan/*, pause semantica "after current task" | COMPLETA |
 | 7.1.3 — WebSocket /ws/plan/{plan_run_id} | _wait_for_plan_run, ws_plan: history replay, streaming, keepalive, resume action, sentinel done | COMPLETA |
+| 7.2.1 — Hook usePlanSocket | dashboard/src/hooks/usePlanSocket.js: WS /ws/plan/{id}, reducer, reconexao 5x/2s, resume()/abort() | COMPLETA |
 
 ---
 
 ## Ultima tarefa aprovada
 
-**Tarefa:** Fase 7.1.3 — WebSocket /ws/plan/{plan_run_id}
-**Commits relevantes:**
-- `e0a81dd` feat: Phase 7.1.1 - plan runner event types for hierarchical execution streaming
-- `7233669` feat: Phase 7.1.2 - plan run REST endpoints with pause/resume and event emission
-- `f1eebe3` feat: Phase 7.1 complete - WebSocket /ws/plan with history replay, pause/resume and keepalive
+**Tarefa:** Fase 7.2.1 — Hook `usePlanSocket` + run_id no TASK_STARTED
 
-**O que foi implementado (Fase 7.1.3):**
+**O que foi implementado:**
 
-- `orchestrator/server.py`:
-  - `_wait_for_plan_run(plan_run_id, max_wait=5.0)` — mesmo padrao race-free do `_wait_for_run`
-  - `@app.websocket("/ws/plan/{plan_run_id}")` — handler completo:
-    - History replay ao conectar (snapshot + queue, sem gaps nem duplicatas)
-    - Streaming em tempo real via queue per-client com fan-out
-    - Keepalive `{"type": "ping", "plan_run_id": "..."}` a cada 30s
-    - Mensagem `{"type": "done", "plan_run_id": "..."}` em eventos terminais
-    - Client action `{"action": "resume"}` -> `state.pause_event.set()` desbloqueia pausa
-    - Erro `{"type": "error"}` + close 4004 se ID desconhecido apos 5s
-    - Cleanup de queue no finally (disconnect abrupto ou erro de rede)
-    - Suporte a multiplos clientes simultaneos no mesmo plan_run_id
-  - Docstring do modulo atualizado com nova rota WS
+- `orchestrator/plan_runner.py`:
+  - `import uuid` adicionado
+  - `_task_run_id = str(uuid.uuid4())` gerado por task antes do emit
+  - `"run_id": _task_run_id` adicionado ao payload do `EventType.TASK_STARTED`
 
-**Testes adicionados (25 novos, total 493):**
-- `TestPlanRunState` (6): dataclass defaults, pause_event, event_bus, queues
-- `TestPlanRunStateCapture` (11, async): PLAN_LOADED, TASK_STARTED/DONE/ESCALATED/SKIPPED, PLAN_PAUSED/RESUMED, PLAN_COMPLETE/ABORTED, fan-out para multiplas queues
-- `TestWebSocketPlanEndpoint` (8): unknown ID->error, history replay, done em complete/aborted, done em historico vazio, cleanup de queue, done com plan_run_id, multiplos eventos em ordem
+- `dashboard/src/hooks/usePlanSocket.js` (arquivo novo):
+  - Conecta ao `WS /ws/plan/{planRunId}` seguindo o mesmo padrao de `useRunSocket`
+  - Reducer com 13 casos de evento: `plan_loaded`, `task_started`, `task_done`, `task_escalated`, `task_skipped`, `plan_paused`, `plan_resumed`, `plan_complete`, `plan_aborted`, `done`, `ping`, `error`, default
+  - Estado exposto: `plan`, `status`, `currentTaskId`, `currentRunId`, `pauseReason`, `pauseContext`, `results`, `wsError`
+  - `currentRunId` populado do `run_id` no evento `task_started`; limpo em `task_done`/`task_escalated`
+  - `resume()`: envia `{"action":"resume"}` via WS se aberto, fallback para `POST /api/plan/resume/{id}`
+  - `abort()`: `POST /api/plan/abort/{id}`
+  - Reconexao automatica: 5x / backoff 2s com `WS_RESET` antes de cada tentativa
+  - `useLayoutEffect` para sync de refs (evita lint `react-hooks/refs`)
 
-- Total: 493 testes passando
+**Testes:** 493 passando (sem novos testes Python necessarios — mudanca de payload nao quebra testes existentes)
 
 ---
 
@@ -379,10 +373,10 @@ CycleRecord    -- task, status, plan, review, decision, attempt,
 
 ## Proximos passos imediatos
 
-**Fase 7 em andamento. Sub-fase 7.1 completa.** Proxima task: **7.2.1 — Hook `usePlanSocket`**
-- Criar `dashboard/src/hooks/usePlanSocket.js`
-- Conectar ao `WS /ws/plan/{plan_run_id}` com reconexao automatica (5x / backoff 2s)
-- Expor: plan, status, currentTaskId, currentRunId, pauseReason, pauseContext, results, resume(), abort()
+**Fase 7 em andamento. Sub-fase 7.1 completa. 7.2.1 completa.** Proxima task: **7.2.2 — Layout da pagina `/plan`**
+- Criar `dashboard/src/pages/Plan.jsx` e `dashboard/src/pages/PlanRun.jsx`
+- Layout 3 zonas: header com progresso, arvore lateral (PlanTree), painel central (PlanExecutionPanel)
+- Integrar `usePlanSocket` para estado em tempo real
 
 Plano detalhado: `docs/Fase7_Dashboard_Plano_Hierarquico.md`
 

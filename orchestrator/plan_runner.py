@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import subprocess
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -693,6 +694,7 @@ async def run_plan(  # noqa: C901
             if not options.quiet:
                 console.print(f"  [dim]Phase {ph.id} — {ph.name}  >  {sp.id} {sp.name}[/dim]")
 
+            _task_run_id = str(uuid.uuid4())
             if event_bus:
                 await event_bus.emit(EventType.TASK_STARTED, {
                     "task_id": task.id,
@@ -700,6 +702,7 @@ async def run_plan(  # noqa: C901
                     "phase_id": ph.id,
                     "subphase_id": sp.id,
                     "attempt": 1,
+                    "run_id": _task_run_id,
                 })
             _task_start = time.monotonic()
 
