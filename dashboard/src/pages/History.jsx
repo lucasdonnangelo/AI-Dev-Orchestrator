@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from 'react'
+import { Link } from 'react-router-dom'
 import Layout from '../components/Layout'
 import Header from '../components/Header'
 import { api } from '../hooks/useApi'
@@ -287,6 +288,20 @@ function CycleDetailModal({ entry, onClose }) {
                   attempt #{entry.attempt}
                 </span>
               )}
+              {entry.plan_run_id && (
+                <Link
+                  to={`/plan/${entry.plan_run_id}`}
+                  onClick={e => e.stopPropagation()}
+                  title="View plan run"
+                  className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-indigo-900/30 text-indigo-400 border border-indigo-800/40 hover:bg-indigo-900/50 transition-colors"
+                >
+                  <span>⊟</span>
+                  <span>
+                    {entry.plan_task_id ?? 'plan'}
+                    {entry.plan_name ? ` — ${entry.plan_name}` : ''}
+                  </span>
+                </Link>
+              )}
             </div>
           </div>
           <button
@@ -569,7 +584,8 @@ function HistoryTable({ entries, onRowClick }) {
             <th className="text-left pb-3 pr-4 font-medium">Duration</th>
             <th className="text-left pb-3 pr-4 font-medium">Score</th>
             <th className="text-left pb-3 pr-4 font-medium">Attempt</th>
-            <th className="text-left pb-3 font-medium">Commit</th>
+            <th className="text-left pb-3 pr-4 font-medium">Commit</th>
+            <th className="text-left pb-3 font-medium">Plan</th>
           </tr>
         </thead>
         <tbody>
@@ -615,8 +631,25 @@ function HistoryTable({ entries, onRowClick }) {
               </td>
 
               {/* Commit */}
-              <td className="py-3 text-xs font-mono text-indigo-400">
+              <td className="py-3 pr-4 text-xs font-mono text-indigo-400">
                 {entry.commit_hash ? entry.commit_hash.slice(0, 8) : '—'}
+              </td>
+
+              {/* Plan run link — only shown when cycle belongs to a plan run */}
+              <td className="py-3 text-xs">
+                {entry.plan_run_id ? (
+                  <Link
+                    to={`/plan/${entry.plan_run_id}`}
+                    onClick={e => e.stopPropagation()}
+                    title={`Task ${entry.plan_task_id ?? '?'}${entry.plan_name ? ` — ${entry.plan_name}` : ''}`}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-indigo-900/30 text-indigo-400 border border-indigo-800/40 hover:bg-indigo-900/50 transition-colors whitespace-nowrap"
+                  >
+                    <span>⊟</span>
+                    <span>{entry.plan_task_id ?? 'plan'}</span>
+                  </Link>
+                ) : (
+                  <span className="text-gray-700">—</span>
+                )}
               </td>
             </tr>
           ))}
