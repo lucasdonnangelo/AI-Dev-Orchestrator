@@ -19,6 +19,10 @@ When you receive **reviewer feedback**, focus on fixing the reported issues:
 - Address `warning` issues if possible.
 - Do NOT refactor unrelated code — only fix what was flagged.
 
+## Environment Isolation
+
+Always use isolated environments. For Python projects, create and activate a virtual environment (`python -m venv .venv`) before installing any dependencies. Never run `pip install` without an active virtualenv. For Node.js projects, `npm install` inside the project directory is correct and expected.
+
 ## Rules
 
 - Do NOT delete or overwrite files unless the plan explicitly says to.
