@@ -508,6 +508,15 @@ async def run_plan(  # noqa: C901
 
     plan_path = Path(plan_path)
     plan = parse_plan(plan_path)
+
+    # Tasks left in RUNNING state indicate a previously interrupted process.
+    # Reset them to PENDING so they are re-executed cleanly.
+    stale = [t for t in plan.all_tasks if t.status == PlanTaskStatus.RUNNING]
+    if stale:
+        for t in stale:
+            t.status = PlanTaskStatus.PENDING
+        write_plan(plan, plan_path)
+
     result = RunPlanResult(plan_name=plan.name)
 
     entries = _collect_entries(plan, options)
