@@ -151,7 +151,7 @@ function CompleteView({ status, results }) {
       {/* Action buttons */}
       <div className="flex gap-3">
         <button
-          onClick={() => navigate('/plan')}
+          onClick={() => navigate('/plan', { replace: true })}
           className="px-4 py-2 rounded-lg bg-gray-800 text-gray-300 text-sm hover:bg-gray-700 border border-gray-700 transition-colors"
         >
           Back to Plan

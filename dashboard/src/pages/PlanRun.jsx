@@ -138,7 +138,7 @@ export default function PlanRun() {
             </button>
           )}
           <button
-            onClick={() => navigate('/plan')}
+            onClick={() => navigate('/plan', { replace: true })}
             className="text-xs text-gray-600 hover:text-gray-400 transition-colors ml-1"
           >
             ← Back
