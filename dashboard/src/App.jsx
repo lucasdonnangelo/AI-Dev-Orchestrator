@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { PlanRunProvider } from './context/PlanRunContext'
 import Home from './pages/Home'
 import Projects from './pages/Projects'
 import ProjectDetail from './pages/ProjectDetail'
@@ -10,6 +11,7 @@ import PlanRun from './pages/PlanRun'
 
 export default function App() {
   return (
+    <PlanRunProvider>
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Home />} />
@@ -22,5 +24,6 @@ export default function App() {
         <Route path="/plan/:planRunId" element={<PlanRun />} />
       </Routes>
     </BrowserRouter>
+    </PlanRunProvider>
   )
 }

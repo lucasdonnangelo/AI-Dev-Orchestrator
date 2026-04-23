@@ -5,6 +5,7 @@ import PlanTree from '../components/PlanTree'
 import PlanExecutionPanel from '../components/PlanExecutionPanel'
 import PlanPausePanel from '../components/PlanPausePanel'
 import { usePlanSocket } from '../hooks/usePlanSocket'
+import { usePlanRunContext } from '../context/PlanRunContext'
 import { api } from '../hooks/useApi'
 
 // ---------------------------------------------------------------------------
@@ -48,6 +49,17 @@ export default function PlanRun() {
     pauseReason, pauseContext, results, wsError,
     resume, abort,
   } = usePlanSocket(planRunId)
+
+  // Sync plan run status to global context so Sidebar can show the badge
+  const { setActivePlanRun, clearActivePlanRun } = usePlanRunContext()
+
+  useEffect(() => {
+    setActivePlanRun(planRunId, status)
+  }, [planRunId, status, setActivePlanRun])
+
+  useEffect(() => {
+    return () => clearActivePlanRun()
+  }, [clearActivePlanRun])   // eslint-disable-line react-hooks/exhaustive-deps
 
   // Full plan from REST — includes subphases + tasks for PlanTree
   const [fullPlan, setFullPlan] = useState(null)

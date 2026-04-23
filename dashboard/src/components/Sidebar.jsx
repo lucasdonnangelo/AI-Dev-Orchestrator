@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom'
+import { usePlanRunContext } from '../context/PlanRunContext'
 
 const NAV_ITEMS = [
   { to: '/', label: 'Run', icon: '▶' },
@@ -8,7 +9,30 @@ const NAV_ITEMS = [
   { to: '/metrics', label: 'Metrics', icon: '◈' },
 ]
 
+// Badge shown on the Plan item when a plan run is active
+function PlanBadge({ status }) {
+  if (status === 'running' || status === 'connecting') {
+    return (
+      <span
+        className="ml-auto w-2 h-2 rounded-full bg-green-400 animate-pulse shrink-0"
+        title="Plan running"
+      />
+    )
+  }
+  if (status === 'paused') {
+    return (
+      <span
+        className="ml-auto w-2 h-2 rounded-full bg-yellow-400 shrink-0"
+        title="Plan paused"
+      />
+    )
+  }
+  return null
+}
+
 export default function Sidebar() {
+  const { activePlanStatus } = usePlanRunContext()
+
   return (
     <aside className="w-56 min-h-screen bg-gray-900 text-gray-300 flex flex-col border-r border-gray-800 shrink-0">
       {/* Brand */}
@@ -36,6 +60,7 @@ export default function Sidebar() {
           >
             <span className="text-base leading-none">{icon}</span>
             {label}
+            {to === '/plan' && <PlanBadge status={activePlanStatus} />}
           </NavLink>
         ))}
       </nav>
