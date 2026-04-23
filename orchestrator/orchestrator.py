@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from rich.console import Console
@@ -16,6 +18,30 @@ if TYPE_CHECKING:
     from orchestrator.events import EventBus, PauseController
 
 console = Console(highlight=False)
+
+
+def _ensure_git_repo(project_dir: str) -> None:
+    """Initialise a git repo in project_dir if one does not already exist.
+
+    Runs git init and, if there are tracked files, an initial commit.
+    Failures are logged as warnings — the cycle always continues.
+    """
+    if (Path(project_dir) / ".git").exists():
+        return
+    try:
+        subprocess.run(["git", "init"], cwd=project_dir, capture_output=True, check=True)
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=project_dir, capture_output=True, text=True, check=True,
+        )
+        if status.stdout.strip():
+            subprocess.run(["git", "add", "."], cwd=project_dir, capture_output=True, check=True)
+            subprocess.run(
+                ["git", "commit", "-m", "chore: initial commit before orchestrator"],
+                cwd=project_dir, capture_output=True, check=True,
+            )
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[yellow][!] Could not initialise git repo in '{project_dir}': {exc}[/yellow]")
 
 
 async def run_cycle(
@@ -52,6 +78,8 @@ async def run_cycle(
         DecisionResult is None only when escalated before reaching the Decisor.
     """
     from orchestrator.events import EventType
+
+    _ensure_git_repo(config.project_dir)
 
     record = CycleRecord(task=task, status=CycleStatus.PLANNED)
     last_diff = ""
