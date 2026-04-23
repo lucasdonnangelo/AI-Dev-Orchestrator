@@ -158,6 +158,7 @@ export default function PlanRun() {
             />
           ) : (
             <PlanExecutionPanel
+              plan={displayPlan}
               status={status}
               currentTaskId={currentTaskId}
               currentRunId={currentRunId}
