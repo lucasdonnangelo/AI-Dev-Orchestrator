@@ -53,6 +53,7 @@ async def generate_plan(
     raw = await provider.call(
         prompt=user_message,
         system=config.load_prompt("planner", _PROMPT_PATH, _FALLBACK),
+        max_tokens=4000,
     )
     return TaskPlan.from_json(raw)
 
@@ -91,5 +92,6 @@ async def refine_plan(
     raw = await provider.call(
         prompt=user_message,
         system=config.load_prompt("planner", _PROMPT_PATH, _FALLBACK),
+        max_tokens=4000,
     )
     return TaskPlan.from_json(raw)
