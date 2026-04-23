@@ -68,9 +68,12 @@ class GeminiProvider(BaseAgent):
         self._client = _genai.Client(api_key=api_key)
         self._model = model
 
-    async def call(self, prompt: str, system: str = "") -> str:
+    async def call(self, prompt: str, system: str = "", max_tokens: int = 2048) -> str:
         async def _do() -> str:
-            cfg = _types.GenerateContentConfig(system_instruction=system) if system else None
+            cfg = _types.GenerateContentConfig(
+                system_instruction=system or None,
+                max_output_tokens=max_tokens,
+            )
             response = await self._client.aio.models.generate_content(
                 model=self._model,
                 contents=prompt,

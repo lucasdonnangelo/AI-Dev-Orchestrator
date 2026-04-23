@@ -22,11 +22,11 @@ class ClaudeProvider(BaseAgent):
         self._client = AsyncAnthropic(api_key=api_key)
         self._model = model
 
-    async def call(self, prompt: str, system: str = "") -> str:
+    async def call(self, prompt: str, system: str = "", max_tokens: int = 2048) -> str:
         async def _do() -> str:
             kwargs: dict = {
                 "model": self._model,
-                "max_tokens": 2048,
+                "max_tokens": max_tokens,
                 "messages": [{"role": "user", "content": prompt}],
             }
             if system:

@@ -34,7 +34,7 @@ class OpenAIProvider(BaseAgent):
         self._client = _AsyncOpenAI(api_key=api_key)
         self._model = model
 
-    async def call(self, prompt: str, system: str = "") -> str:
+    async def call(self, prompt: str, system: str = "", max_tokens: int = 2048) -> str:
         async def _do() -> str:
             messages: list[dict] = []
             if system:
@@ -43,6 +43,7 @@ class OpenAIProvider(BaseAgent):
             response = await self._client.chat.completions.create(
                 model=self._model,
                 messages=messages,
+                max_tokens=max_tokens,
             )
             return response.choices[0].message.content or ""
 

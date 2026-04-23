@@ -26,12 +26,13 @@ class BaseAgent(ABC):
     """
 
     @abstractmethod
-    async def call(self, prompt: str, system: str = "") -> str:
+    async def call(self, prompt: str, system: str = "", max_tokens: int = 2048) -> str:
         """Send a prompt to the model and return the raw text response.
 
         Args:
             prompt: The user-turn content to send.
             system: Optional system prompt / instruction.
+            max_tokens: Maximum tokens in the response (default 2048).
 
         Returns:
             The model's text response as a plain string.

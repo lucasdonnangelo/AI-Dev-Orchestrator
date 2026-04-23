@@ -71,6 +71,7 @@ async def generate_project_plan(
     raw_md = await provider.call(
         prompt=user_message,
         system=config.load_prompt("project_planner", _PROMPT_PATH, _FALLBACK),
+        max_tokens=4000,
     )
 
     raw_md = _strip_outer_fence(raw_md)
@@ -118,6 +119,7 @@ async def refine_project_plan(
     new_raw = await provider.call(
         prompt=user_message,
         system=config.load_prompt("project_planner", _PROMPT_PATH, _FALLBACK),
+        max_tokens=4000,
     )
     new_raw = _strip_outer_fence(new_raw)
     plan = parse_plan_text(new_raw)
