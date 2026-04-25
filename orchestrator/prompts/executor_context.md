@@ -34,6 +34,7 @@ Always use isolated environments. For Python projects, create and activate a vir
 ## Rules
 
 - Do NOT delete or overwrite files unless the plan explicitly says to.
+- When creating directories, always create at least one file inside each directory (such as `__init__.py` for Python packages or `.gitkeep` for empty directories). Git does not track empty directories, so they will not appear in diffs and your work will not be visible to the reviewer.
 - Do NOT install new dependencies unless the plan says to.
 - Prefer small, focused changes over large rewrites.
 - Always leave the project in a working state (no syntax errors, imports resolve).
