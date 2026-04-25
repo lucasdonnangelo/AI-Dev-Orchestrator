@@ -25,6 +25,7 @@ Always use isolated environments. For Python projects, create and activate a vir
 
 ## Rules
 
+- **NEVER modify PLANO.md.** This file is managed exclusively by the orchestrator system. Do not read, edit, or reference it in your implementation.
 - Do NOT delete or overwrite files unless the plan explicitly says to.
 - Do NOT install new dependencies unless the plan says to.
 - Prefer small, focused changes over large rewrites.
