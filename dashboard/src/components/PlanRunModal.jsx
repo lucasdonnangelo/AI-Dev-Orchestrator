@@ -111,6 +111,8 @@ export default function PlanRunModal({ projects, initialProjectId, onClose, onSt
 
     try {
       const data = await api.post('/api/plan/run', body)
+      console.log('response:', data)
+      console.log('navigating to /plan/' + data.plan_run_id)
       onStarted(data.plan_run_id)
     } catch (e) {
       setError(e.message ?? 'Failed to start plan run.')

@@ -16,6 +16,7 @@ export default function Plan() {
   const [loadError, setLoadError]               = useState(null)
   const [showRunModal, setShowRunModal]         = useState(false)
   const [showGenerateModal, setShowGenerateModal] = useState(false)
+  const [resetting, setResetting]               = useState(false)
 
   useEffect(() => {
     api.get('/api/projects').then(setProjects).catch(() => {})
@@ -35,6 +36,18 @@ export default function Plan() {
 
   function handleRunStarted(planRunId) {
     navigate(`/plan/${planRunId}`)
+  }
+
+  async function handleReset() {
+    if (!selectedProjectId) return
+    if (!window.confirm('Reset all tasks to pending ([ ])? This cannot be undone.')) return
+    setResetting(true)
+    try {
+      await api.post('/api/plan/reset', { project_id: selectedProjectId })
+      loadPlan(selectedProjectId)
+    } finally {
+      setResetting(false)
+    }
   }
 
   // Called when PlanGenerateModal saves a plan — reload the tree
@@ -69,6 +82,15 @@ export default function Plan() {
             className="px-4 py-1.5 text-sm rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             Generate with AI
+          </button>
+
+          {/* Reset plan checkboxes */}
+          <button
+            onClick={handleReset}
+            disabled={!plan || resetting}
+            className="px-4 py-1.5 text-sm rounded-lg bg-gray-800 text-gray-300 border border-gray-700 hover:bg-red-900/40 hover:text-red-300 hover:border-red-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            {resetting ? 'Resetting…' : 'Reset Plan'}
           </button>
 
           {/* Start execution — only when plan is loaded */}

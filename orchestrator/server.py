@@ -59,7 +59,7 @@ from orchestrator.config import Config
 from orchestrator.context import build_tree, detect_stack, load_readme
 from orchestrator.events import Event, EventBus, EventType, PauseController
 from orchestrator.models import CycleRecord
-from orchestrator.plan import ProjectPlan, parse_plan
+from orchestrator.plan import PlanTaskStatus, ProjectPlan, parse_plan, write_plan
 from orchestrator.plan_runner import RunPlanOptions, TaskResult
 from orchestrator.project_planner import generate_project_plan, run_project_plan_critic_loop
 
@@ -326,6 +326,11 @@ class PlanGenerateRequest(BaseModel):
 class PlanSaveRequest(BaseModel):
     project_id: str
     content: str
+    plan_path: str = "PLANO.md"
+
+
+class PlanResetRequest(BaseModel):
+    project_id: str
     plan_path: str = "PLANO.md"
 
 
@@ -897,6 +902,38 @@ async def save_plan(req: PlanSaveRequest) -> dict[str, Any]:
 
     return {"saved": True, "path": str(target)}
 
+
+@app.post("/api/plan/reset")
+async def reset_plan(req: PlanResetRequest) -> dict[str, Any]:
+    """Reset all task checkboxes in PLANO.md back to pending ([ ]).
+
+    Parses the existing file, sets every task status to PENDING, and writes
+    the file back in-place preserving all headings and prose.
+    """
+    project = _get_project_or_404(req.project_id)
+    abs_plan = Path(project["path"]) / req.plan_path
+
+    if not abs_plan.exists():
+        raise HTTPException(status_code=404, detail=f"'{req.plan_path}' not found in project")
+
+    try:
+        plan = parse_plan(abs_plan)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"Failed to parse plan: {exc}")
+
+    for phase in plan.phases:
+        for subphase in phase.subphases:
+            for task in subphase.tasks:
+                task.status = PlanTaskStatus.PENDING
+                task.commit_hash = None
+
+    try:
+        write_plan(plan, abs_plan)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to write plan: {exc}")
+
+    total = sum(len(sp.tasks) for ph in plan.phases for sp in ph.subphases)
+    return {"reset": True, "tasks_reset": total}
 
 
 # ---------------------------------------------------------------------------
