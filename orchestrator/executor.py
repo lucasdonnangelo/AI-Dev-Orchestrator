@@ -94,6 +94,35 @@ def _run_query_sync(prompt: str, options: ClaudeAgentOptions) -> None:
     asyncio.run(_inner())
 
 
+def _snapshot_plano(project_dir: str) -> str | None:
+    """Return current contents of PLANO.md, or None if it does not exist."""
+    plano = Path(project_dir) / "PLANO.md"
+    if plano.exists():
+        return plano.read_text(encoding="utf-8")
+    return None
+
+
+def _restore_plano_if_modified(project_dir: str, original: str | None) -> None:
+    """Restore PLANO.md if the Executor modified it despite instructions."""
+    plano = Path(project_dir) / "PLANO.md"
+    if original is None:
+        # PLANO.md did not exist before — remove it if Executor created it.
+        if plano.exists():
+            subprocess.run(
+                ["git", "checkout", "--", "PLANO.md"],
+                cwd=project_dir,
+                capture_output=True,
+            )
+        return
+
+    if not plano.exists() or plano.read_text(encoding="utf-8") != original:
+        subprocess.run(
+            ["git", "checkout", "--", "PLANO.md"],
+            cwd=project_dir,
+            capture_output=True,
+        )
+
+
 async def execute_plan(
     plan: TaskPlan,
     config: Config,
@@ -121,6 +150,8 @@ async def execute_plan(
         permission_mode="bypassPermissions",
     )
 
+    plano_before = _snapshot_plano(config.project_dir)
     await asyncio.to_thread(_run_query_sync, prompt, options)
+    _restore_plano_if_modified(config.project_dir, plano_before)
 
     return _get_diff(config.project_dir)
