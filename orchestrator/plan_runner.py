@@ -17,6 +17,7 @@ import asyncio
 import subprocess
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -470,6 +471,7 @@ async def run_plan(  # noqa: C901
     *,
     event_bus: EventBus | None = None,
     pause_event: asyncio.Event | None = None,
+    on_task_started: Callable[[str], EventBus | None] | None = None,
 ) -> RunPlanResult:
     """Execute tasks from PLANO.md sequentially through the full agent cycle.
 
@@ -704,6 +706,12 @@ async def run_plan(  # noqa: C901
                 console.print(f"  [dim]Phase {ph.id} — {ph.name}  >  {sp.id} {sp.name}[/dim]")
 
             _task_run_id = str(uuid.uuid4())
+            # Let the server (or any other caller) create a RunState for this
+            # task's cycle and return its EventBus so streaming reaches the
+            # /ws/run/{run_id} WebSocket that the frontend connects to.
+            _cycle_event_bus: EventBus | None = (
+                on_task_started(_task_run_id) if on_task_started else None
+            )
             if event_bus:
                 await event_bus.emit(EventType.TASK_STARTED, {
                     "task_id": task.id,
@@ -731,7 +739,8 @@ async def run_plan(  # noqa: C901
 
             try:
                 record, diff, _ = await run_cycle(
-                    full_task, config, phase_context=phase_ctx or None
+                    full_task, config, phase_context=phase_ctx or None,
+                    event_bus=_cycle_event_bus,
                 )
             except Exception as exc:  # noqa: BLE001
                 console.print(

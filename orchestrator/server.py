@@ -400,6 +400,21 @@ async def _run_batch_bg(
 
 async def _run_plan_bg(state: PlanRunState, options: RunPlanOptions) -> None:
     """Execute run_plan in the background, updating PlanRunState as events arrive."""
+
+    def _on_task_started(run_id: str) -> EventBus:
+        """Register a RunState in _active_runs for this task's cycle.
+
+        Called by plan_runner just before run_cycle so that /ws/run/{run_id}
+        clients can stream the individual cycle events (AgentCards).
+        """
+        task_state = RunState(
+            run_id=run_id,
+            task="",           # filled in by cycle_planning event
+            project_dir=state.project_path,
+        )
+        _active_runs[run_id] = task_state
+        return task_state.event_bus
+
     try:
         config = Config.load(state.project_path)
         run_result = await plan_runner_mod.run_plan(
@@ -408,6 +423,7 @@ async def _run_plan_bg(state: PlanRunState, options: RunPlanOptions) -> None:
             options,
             event_bus=state.event_bus,
             pause_event=state.pause_event,
+            on_task_started=_on_task_started,
         )
         state.results = run_result.results
         state.status = "complete"
