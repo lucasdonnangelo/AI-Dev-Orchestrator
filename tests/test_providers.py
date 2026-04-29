@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import types
 from unittest.mock import MagicMock, patch
@@ -18,6 +19,7 @@ from orchestrator.providers import (
     register_provider,
 )
 from orchestrator.providers import _plugin_registry
+from orchestrator.providers.anthropic import _EmptyResponseError
 from orchestrator.providers.base import BaseAgent as BaseAgentDirect
 
 
@@ -39,6 +41,22 @@ class TestBaseAgent:
 # ClaudeProvider
 # ---------------------------------------------------------------------------
 
+def _mock_response(text: str) -> MagicMock:
+    """Build a minimal Anthropic-like response with a single text block."""
+    content_block = MagicMock()
+    content_block.text = text
+    response = MagicMock()
+    response.content = [content_block]
+    return response
+
+
+def _empty_response() -> MagicMock:
+    """Build an Anthropic-like response with no content blocks."""
+    response = MagicMock()
+    response.content = []
+    return response
+
+
 class TestClaudeProvider:
     def test_instantiates_with_key_and_model(self):
         p = ClaudeProvider(api_key="sk-ant", model="claude-sonnet-4-6")
@@ -51,6 +69,76 @@ class TestClaudeProvider:
         import inspect
         p = ClaudeProvider(api_key="sk")
         assert inspect.iscoroutinefunction(p.call)
+
+    # ------------------------------------------------------------------
+    # Empty / unparseable response retry behaviour
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_call_retries_on_json_decode_error(self, monkeypatch):
+        """json.JSONDecodeError (HTTP 200 with empty body) triggers a retry."""
+        monkeypatch.setattr("orchestrator.providers.retry.asyncio.sleep", _noop_sleep)
+        p = ClaudeProvider(api_key="sk-ant")
+        calls = {"n": 0}
+
+        async def _fake_create(**kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise json.JSONDecodeError("Expecting value", "", 0)
+            return _mock_response("hello")
+
+        monkeypatch.setattr(p._client.messages, "create", _fake_create)
+        result = await p.call("test prompt")
+        assert result == "hello"
+        assert calls["n"] == 2
+
+    @pytest.mark.asyncio
+    async def test_call_retries_on_empty_content_list(self, monkeypatch):
+        """Empty content list (200 OK, no blocks) triggers a retry."""
+        monkeypatch.setattr("orchestrator.providers.retry.asyncio.sleep", _noop_sleep)
+        p = ClaudeProvider(api_key="sk-ant")
+        calls = {"n": 0}
+
+        async def _fake_create(**kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return _empty_response()
+            return _mock_response("world")
+
+        monkeypatch.setattr(p._client.messages, "create", _fake_create)
+        result = await p.call("test prompt")
+        assert result == "world"
+        assert calls["n"] == 2
+
+    @pytest.mark.asyncio
+    async def test_call_raises_empty_response_error_after_exhausting_retries(self, monkeypatch):
+        """Persistent empty content exhausts retries and raises _EmptyResponseError."""
+        monkeypatch.setattr("orchestrator.providers.retry.asyncio.sleep", _noop_sleep)
+        p = ClaudeProvider(api_key="sk-ant")
+
+        async def _fake_create(**kwargs):
+            return _empty_response()
+
+        monkeypatch.setattr(p._client.messages, "create", _fake_create)
+        with pytest.raises(_EmptyResponseError):
+            await p.call("test prompt")
+
+    @pytest.mark.asyncio
+    async def test_call_raises_json_decode_error_after_exhausting_retries(self, monkeypatch):
+        """Persistent JSONDecodeError exhausts retries and re-raises."""
+        monkeypatch.setattr("orchestrator.providers.retry.asyncio.sleep", _noop_sleep)
+        p = ClaudeProvider(api_key="sk-ant")
+
+        async def _fake_create(**kwargs):
+            raise json.JSONDecodeError("Expecting value", "", 0)
+
+        monkeypatch.setattr(p._client.messages, "create", _fake_create)
+        with pytest.raises(json.JSONDecodeError):
+            await p.call("test prompt")
+
+
+async def _noop_sleep(_: float) -> None:
+    """Drop-in replacement for asyncio.sleep that returns immediately."""
 
 
 # ---------------------------------------------------------------------------
