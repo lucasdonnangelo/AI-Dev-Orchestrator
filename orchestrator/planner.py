@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -11,6 +12,8 @@ from orchestrator.providers import make_provider
 
 if TYPE_CHECKING:
     from orchestrator.models import CriticResult
+
+_log = logging.getLogger(__name__)
 
 _PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "planner_system.md"
 _FALLBACK = "You are a software planning assistant."
@@ -57,6 +60,7 @@ async def generate_plan(
     )
     if not raw or not raw.strip():
         raise ValueError("Planner returned empty response")
+    _log.debug("Planner raw response: %r", raw[:200] if raw else None)
     return TaskPlan.from_json(raw)
 
 
@@ -98,4 +102,5 @@ async def refine_plan(
     )
     if not raw or not raw.strip():
         raise ValueError("Planner returned empty response")
+    _log.debug("Planner raw response: %r", raw[:200] if raw else None)
     return TaskPlan.from_json(raw)

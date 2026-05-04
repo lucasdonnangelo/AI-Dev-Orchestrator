@@ -78,7 +78,11 @@ class TaskPlan:
 
     @classmethod
     def from_json(cls, raw: str) -> TaskPlan:
-        return cls.from_dict(json.loads(raw))
+        text = raw.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1]
+            text = text.rsplit("```", 1)[0]
+        return cls.from_dict(json.loads(text))
 
 
 # ---------------------------------------------------------------------------
