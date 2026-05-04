@@ -45,6 +45,9 @@ class ClaudeProvider(BaseAgent):
             response = await self._client.messages.create(**kwargs)
             if not response.content:
                 raise _EmptyResponseError("API returned empty content block list")
-            return response.content[0].text
+            text = response.content[0].text
+            if not text or not text.strip():
+                raise _EmptyResponseError("API returned content block with empty text")
+            return text
 
         return await call_with_retry(_do, retryable=_RETRYABLE)

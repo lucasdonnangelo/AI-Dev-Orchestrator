@@ -55,6 +55,8 @@ async def generate_plan(
         system=config.load_prompt("planner", _PROMPT_PATH, _FALLBACK),
         max_tokens=4000,
     )
+    if not raw or not raw.strip():
+        raise ValueError("Planner returned empty response")
     return TaskPlan.from_json(raw)
 
 
@@ -94,4 +96,6 @@ async def refine_plan(
         system=config.load_prompt("planner", _PROMPT_PATH, _FALLBACK),
         max_tokens=4000,
     )
+    if not raw or not raw.strip():
+        raise ValueError("Planner returned empty response")
     return TaskPlan.from_json(raw)

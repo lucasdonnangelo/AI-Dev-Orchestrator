@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import subprocess
 import time
+import traceback
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -744,7 +745,8 @@ async def run_plan(  # noqa: C901
                 )
             except Exception as exc:  # noqa: BLE001
                 console.print(
-                    f"  [red]ERROR[/red] Unexpected error while executing task {task.id}: {exc}"
+                    f"  [red]ERROR[/red] Unexpected error while executing task {task.id}: {exc}\n"
+                    f"{traceback.format_exc()}"
                 )
                 task.mark_escalated()
                 write_plan(plan, plan_path)
